@@ -1,0 +1,7 @@
+{
+  "name": "Pawshionista: Pet Live Sell Manager",
+  "description": "A cute, mobile-optimized live selling management system for dog clothes businesses. Handles real-time order encoding, inventory tracking, profit computation, and customer history.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
