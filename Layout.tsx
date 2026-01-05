@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
-import { useSettings } from '../services/SettingsContext';
-import { HomeIcon, CartIcon, PlusIcon, SearchIcon, UserIcon, PawIcon, CogIcon, MenuIcon, ChartIcon, BoxIcon, ReportIcon, ShieldIcon } from ',./Icons';
+import { useSettings } from '/services/SettingsContext';
+import { HomeIcon, CartIcon, PlusIcon, SearchIcon, UserIcon, PawIcon, CogIcon, MenuIcon, ChartIcon, BoxIcon, ReportIcon, ShieldIcon } from '/components/Icons';
 
 interface LayoutProps {
   children: React.ReactNode;
