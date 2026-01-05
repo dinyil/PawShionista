@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect } from 'react';
-import { useSettings } from 'services/SettingsContext';
+import { useSettings } from '../services/SettingsContext';
 import { 
   HomeIcon, CartIcon, PlusIcon, SearchIcon, UserIcon, PawIcon, 
   CogIcon, MenuIcon, ChartIcon, BoxIcon, ReportIcon, ShieldIcon 
