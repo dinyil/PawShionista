@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { db } from '../services/dbService';
@@ -113,6 +112,8 @@ const Orders: React.FC = () => {
 
   const [selectedOrder, setSelectedOrder] = useState<GroupedOrder | null>(null);
   const [allOrders, setAllOrders] = useState(db.getOrders());
+  const [deleteTarget, setDeleteTarget] = useState<GroupedOrder | null>(null);
+  
   const customers = db.getCustomers();
 
   // Prepare Sessions List
@@ -242,6 +243,13 @@ const Orders: React.FC = () => {
     });
     setAllOrders(db.getOrders());
     setSelectedOrder(null);
+  };
+
+  const handleDelete = () => {
+    if (!deleteTarget) return;
+    deleteTarget.ids.forEach(id => db.deleteOrder(id));
+    setAllOrders(db.getOrders());
+    setDeleteTarget(null);
   };
 
   // --- VIEW: SESSION SELECTION ---
@@ -396,6 +404,16 @@ const Orders: React.FC = () => {
                     )}
                     <p className="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase bg-gray-50 dark:bg-gray-700 px-2 py-0.5 rounded">{group.quantity} items</p>
                   </div>
+                  <div className="mt-2 space-y-1">
+                     <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest bg-gray-50 dark:bg-gray-700 px-2 py-1 rounded inline-block">
+                        Session: {selectedSession?.name}
+                     </p>
+                     {group.referenceNumber && (
+                        <p className="text-[10px] font-bold text-gray-500 dark:text-gray-300 italic px-1">
+                           "{group.referenceNumber}"
+                        </p>
+                     )}
+                  </div>
                </div>
                <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-wider ${group.paymentStatus === 'Paid' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'}`}>{group.paymentStatus}</span>
             </div>
@@ -413,11 +431,26 @@ const Orders: React.FC = () => {
                <p className="text-2xl font-black text-gray-800 dark:text-white leading-none">₱{group.totalPrice.toLocaleString()}</p>
             </div>
             
-            <button onClick={() => setSelectedOrder(group)} className="w-full py-4 bg-gray-900 dark:bg-black text-white font-black rounded-2xl text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all group-hover:bg-pawPinkDark">Manage Order</button>
+            <div className="flex gap-2">
+                <button onClick={() => setSelectedOrder(group)} className="flex-1 py-4 bg-gray-900 dark:bg-black text-white font-black rounded-2xl text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all group-hover:bg-pawPinkDark">Manage</button>
+                <button 
+                    onClick={() => setDeleteTarget(group)}
+                    className="w-14 flex items-center justify-center bg-gray-100 dark:bg-gray-700 text-gray-400 hover:bg-red-100 hover:text-red-500 rounded-2xl transition-colors"
+                >
+                    🗑️
+                </button>
+            </div>
           </div>
         ))}
       </div>
       {selectedOrder && <StatusModal order={selectedOrder} onClose={() => setSelectedOrder(null)} onSave={handleUpdate} />}
+      {deleteTarget && (
+         <DeleteOrderConfirmationModal 
+            customer={deleteTarget.customerUsername} 
+            onConfirm={handleDelete}
+            onClose={() => setDeleteTarget(null)}
+         />
+      )}
     </div>
   );
 };
@@ -591,34 +624,25 @@ const StatusModal = ({ order, onClose, onSave }: any) => {
                 </div>
             </div>
 
-            <div className="flex gap-4 pt-4 mt-auto">
-                <button onClick={onClose} className="flex-1 py-4 bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-300 font-black rounded-2xl uppercase text-xs tracking-widest">Cancel</button>
-                <button onClick={handleSaveClick} className="flex-1 py-4 bg-pawPinkDark text-white font-black rounded-2xl shadow-lg uppercase text-xs tracking-widest hover:bg-red-400">Save Changes</button>
+            <div className="flex gap-3 pt-4 mt-auto">
+                <button onClick={onClose} className="flex-1 py-4 bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-300 font-black uppercase text-xs tracking-widest rounded-2xl active:scale-95 transition-all">Cancel</button>
+                <button onClick={handleSaveClick} className="flex-1 py-4 bg-pawPinkDark text-white font-black uppercase text-xs tracking-widest rounded-2xl shadow-lg active:scale-95 transition-all">Save Changes</button>
             </div>
-            </div>
+          </div>
         </div>
 
-        {/* Right: Audit Log & Info */}
-        <div className="w-full md:w-80 bg-gray-50 dark:bg-gray-900 border-l border-gray-100 dark:border-gray-700 p-6 flex flex-col">
-            {/* Balance Card */}
-            {remainingBalance > 0 && (
-                <div className="bg-red-50 dark:bg-red-900/20 p-5 rounded-2xl border border-red-100 dark:border-red-900/50 mb-6 text-center animate-shake">
-                    <p className="text-[9px] font-black text-red-600 dark:text-red-400 uppercase tracking-widest mb-1">Remaining Balance</p>
-                    <p className="text-2xl font-black text-red-700 dark:text-red-300">₱{remainingBalance.toLocaleString()}</p>
-                    <p className="text-[9px] font-bold text-red-400 mt-1">Needs Payment</p>
-                </div>
-            )}
-            
-            <h4 className="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-3">Audit Log</h4>
-            <div className="flex-1 overflow-y-auto custom-scrollbar space-y-0 pr-1 pt-2">
-                {uniqueLogs.length === 0 ? (
-                    <div className="text-center py-10 opacity-40">
-                        <span className="text-4xl grayscale">📜</span>
-                        <p className="mt-2 text-[10px] font-black text-gray-400 uppercase tracking-widest">No history recorded</p>
-                    </div>
-                ) : uniqueLogs.map((log, idx) => (
-                    <LogItem key={idx} log={log} />
-                ))}
+        {/* Right: Audit Log */}
+        <div className="md:w-80 bg-gray-50 dark:bg-gray-900 border-l-4 border-white dark:border-gray-700 flex flex-col h-[300px] md:h-auto">
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+               <h4 className="font-black text-gray-800 dark:text-white uppercase tracking-tight">Audit Log</h4>
+               <p className="text-xs text-gray-400 dark:text-gray-500 font-bold">History of changes</p>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
+               {uniqueLogs.length === 0 ? (
+                  <p className="text-center text-gray-400 text-xs py-10">No history available</p>
+               ) : uniqueLogs.map((log: string, i: number) => (
+                  <LogItem key={i} log={log} />
+               ))}
             </div>
         </div>
 
@@ -626,5 +650,27 @@ const StatusModal = ({ order, onClose, onSave }: any) => {
     </div>, document.body
   );
 };
+
+const DeleteOrderConfirmationModal = ({ customer, onConfirm, onClose }: { customer: string, onConfirm: () => void, onClose: () => void }) => (
+    createPortal(
+    <div className="fixed inset-0 z-[130] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md animate-fadeIn">
+      <div className="bg-white dark:bg-gray-800 w-full max-w-sm rounded-[3.5rem] p-10 text-center animate-scaleUp shadow-2xl border-4 border-red-500">
+         <div className="bg-red-100 dark:bg-red-900/30 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6"><span className="text-5xl">🗑️</span></div>
+         <h3 className="text-2xl font-black text-gray-900 dark:text-white uppercase tracking-tight mb-2">
+            Delete Orders?
+         </h3>
+         <p className="text-gray-500 dark:text-gray-400 font-bold text-sm mb-8 leading-relaxed">
+            Removing all visible orders for <span className="text-red-600 dark:text-red-400">@{customer}</span> in this session.
+         </p>
+         <div className="flex gap-3">
+             <button onClick={onClose} className="flex-1 py-4 bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-black uppercase text-xs tracking-widest rounded-2xl active:scale-95 transition-all">Cancel</button>
+             <button onClick={onConfirm} className="flex-1 py-4 bg-red-600 text-white font-black uppercase text-xs tracking-widest rounded-2xl shadow-xl shadow-red-200 active:scale-95 transition-all">
+                Delete
+             </button>
+         </div>
+      </div>
+    </div>, document.body
+  )
+);
 
 export default Orders;

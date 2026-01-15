@@ -35,50 +35,67 @@ const Dashboard: React.FC = () => {
     return costs;
   }, [bales]);
 
-  // --- 2. Real-time "Today" Stats ---
+  // --- 2. Dynamic Stats based on chartFilter ---
   const stats = useMemo(() => {
-    const todayStr = new Date().toLocaleDateString('en-US');
+    const now = new Date();
     
-    // Filter for today
-    const todayOrders = orders.filter(o => new Date(o.createdAt).toLocaleDateString('en-US') === todayStr && o.shippingStatus !== ShippingStatus.CANCELLED);
-    const todayExpenses = transactions.filter(t => t.type === 'Expense' && new Date(t.createdAt).toLocaleDateString('en-US') === todayStr);
+    // Filter logic for period
+    const isWithinPeriod = (timestamp: number) => {
+        const d = new Date(timestamp);
+        if (chartFilter === 'Today') {
+            return d.toDateString() === now.toDateString();
+        }
+        if (chartFilter === 'Month') {
+            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        }
+        if (chartFilter === 'Year') {
+            return d.getFullYear() === now.getFullYear();
+        }
+        return true;
+    };
 
-    // Revenue
-    const totalSalesToday = todayOrders.reduce((sum, o) => sum + o.totalPrice, 0);
+    const filteredOrders = orders.filter(o => isWithinPeriod(o.createdAt) && o.shippingStatus !== ShippingStatus.CANCELLED);
+    const filteredExpenses = transactions.filter(t => t.type === 'Expense' && isWithinPeriod(t.createdAt));
+
+    // Revenue in period
+    const totalSales = filteredOrders.reduce((sum, o) => sum + o.totalPrice, 0);
     
-    // COGS (Cost of items sold today)
-    const totalCOGS = todayOrders.reduce((sum, o) => {
+    // COGS for items sold in period
+    const totalCOGS = filteredOrders.reduce((sum, o) => {
         const product = products.find(p => p.id === o.productId);
         const baleId = product?.baleBatch || '';
         const unitCost = baleUnitCosts[baleId] || 0;
         return sum + (unitCost * o.quantity);
     }, 0);
 
-    // Expenses
-    const totalExpenses = todayExpenses.reduce((sum, t) => sum + t.amount, 0);
+    // Expenses in period
+    const totalExpenses = filteredExpenses.reduce((sum, t) => sum + t.amount, 0);
 
     // Net Profit = Sales - COGS - Expenses
-    const netProfitToday = totalSalesToday - totalCOGS - totalExpenses;
+    const netProfit = totalSales - totalCOGS - totalExpenses;
 
-    const pendingPayments = orders.filter(o => o.paymentStatus !== PaymentStatus.PAID && o.shippingStatus !== ShippingStatus.CANCELLED).length;
-    const toShip = orders.filter(o => o.shippingStatus === ShippingStatus.PENDING).length;
+    // Filter status counts within the period
+    const pendingPayments = filteredOrders.filter(o => o.paymentStatus !== PaymentStatus.PAID).length;
+    const shippedCount = filteredOrders.filter(o => o.shippingStatus === ShippingStatus.SHIPPED).length;
+
+    const labelSuffix = chartFilter === 'Today' ? 'Today' : chartFilter === 'Month' ? 'this Month' : 'this Year';
 
     return { 
-      salesToday: totalSalesToday, 
-      profitToday: netProfitToday,
-      ordersToday: todayOrders.length, 
-      pendingPayments, 
-      toShip 
+      sales: totalSales, 
+      profit: netProfit,
+      count: filteredOrders.length, 
+      pending: pendingPayments, 
+      shipped: shippedCount,
+      labelSuffix
     };
-  }, [orders, products, baleUnitCosts, transactions]);
+  }, [orders, products, baleUnitCosts, transactions, chartFilter]);
 
-  // --- 3. Chart Data Generation ---
+  // --- 3. Chart Data Generation (remains synced with chartFilter) ---
   const chartData = useMemo(() => {
     const now = new Date();
     let dataPoints: any[] = [];
     
     if (chartFilter === 'Today') {
-       // Hourly breakdown (00 - 23)
        dataPoints = Array.from({ length: 24 }, (_, i) => ({
           name: i === 0 ? '12MN' : i === 12 ? '12NN' : i > 12 ? `${i-12}PM` : `${i}AM`,
           tooltipLabel: new Date(now.getFullYear(), now.getMonth(), now.getDate(), i).toLocaleTimeString([], {hour: 'numeric', minute:'2-digit'}),
@@ -87,7 +104,6 @@ const Dashboard: React.FC = () => {
           rawHour: i
        }));
 
-       // Populate Orders
        orders.forEach(o => {
           const d = new Date(o.createdAt);
           if (d.toDateString() === now.toDateString() && o.shippingStatus !== ShippingStatus.CANCELLED) {
@@ -98,7 +114,6 @@ const Dashboard: React.FC = () => {
           }
        });
 
-       // Subtract Expenses
        transactions.filter(t => t.type === 'Expense').forEach(t => {
           const d = new Date(t.createdAt);
           if (d.toDateString() === now.toDateString()) {
@@ -108,7 +123,6 @@ const Dashboard: React.FC = () => {
        });
 
     } else if (chartFilter === 'Month') {
-       // Daily breakdown (1 - DaysInMonth)
        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
        const monthName = now.toLocaleDateString('en-US', { month: 'long' });
        
@@ -141,7 +155,6 @@ const Dashboard: React.FC = () => {
        });
 
     } else if (chartFilter === 'Year') {
-       // Monthly breakdown (Jan - Dec)
        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
        dataPoints = months.map((m, i) => ({
           name: m,
@@ -187,11 +200,11 @@ const Dashboard: React.FC = () => {
   // Metric Toggle Logic
   const handleToggle = (metric: 'Revenue' | 'Profit') => {
     if (metricMode === 'Combined') {
-      setMetricMode(metric); // Focus on this metric
+      setMetricMode(metric);
     } else if (metricMode === metric) {
-      setMetricMode('Combined'); // Unclick -> go back to Combined
+      setMetricMode('Combined');
     } else {
-      setMetricMode(metric); // Switch directly
+      setMetricMode(metric);
     }
   };
 
@@ -200,7 +213,7 @@ const Dashboard: React.FC = () => {
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Shop Overview 🐾</h1>
-          <p className="text-gray-500 dark:text-gray-400">Business performance metrics for today.</p>
+          <p className="text-gray-500 dark:text-gray-400">Business performance metrics for {stats.labelSuffix.toLowerCase()}.</p>
         </div>
         <div className="bg-white/50 dark:bg-gray-800/50 px-4 py-2 rounded-2xl border border-white dark:border-gray-700 shadow-sm flex flex-col items-end">
             <p className="text-xl font-black text-gray-700 dark:text-gray-200 leading-none">{currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
@@ -211,27 +224,27 @@ const Dashboard: React.FC = () => {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard 
-            label="Sales Today" 
-            value={`₱${stats.salesToday.toLocaleString()}`} 
+            label={`Sales ${stats.labelSuffix}`} 
+            value={`₱${stats.sales.toLocaleString()}`} 
             color="bg-pawPink dark:bg-pink-900/40" 
             textColor="text-red-600 dark:text-red-400" 
         />
         <StatCard 
-            label="Net Profit Today" 
-            value={`₱${stats.profitToday.toLocaleString()}`} 
+            label={`Profit ${stats.labelSuffix}`} 
+            value={`₱${stats.profit.toLocaleString()}`} 
             color="bg-purple-100 dark:bg-purple-900/40" 
             textColor="text-purple-700 dark:text-purple-300" 
-            subValue={stats.profitToday < 0 ? "(Expense Heavy)" : "Clear Income"}
+            subValue={stats.profit < 0 ? "(Expense Heavy)" : "Net Earnings"}
         />
         <StatCard 
-            label="Pending Payment" 
-            value={stats.pendingPayments} 
+            label="Pending Payments" 
+            value={stats.pending} 
             color="bg-pawPeach dark:bg-orange-900/40" 
             textColor="text-orange-600 dark:text-orange-300" 
         />
         <StatCard 
-            label="To Ship" 
-            value={stats.toShip} 
+            label="Shipped" 
+            value={stats.shipped} 
             color="bg-pawSoftBlue dark:bg-blue-900/40" 
             textColor="text-blue-600 dark:text-blue-300" 
         />
@@ -272,10 +285,8 @@ const Dashboard: React.FC = () => {
                     dataKey="name" 
                     axisLine={false} 
                     tickLine={false} 
-                    // Changed to a darker gray so it's readable
                     tick={{ fill: '#6B7280', fontSize: 10, fontWeight: 700 }} 
                     dy={10}
-                    // For 'Today', show every 3rd hour to prevent crowding. Else show all.
                     interval={chartFilter === 'Today' ? 2 : 0} 
                  />
                  <YAxis 
@@ -286,7 +297,7 @@ const Dashboard: React.FC = () => {
                  />
                  <Tooltip 
                     cursor={{ fill: '#FAF5FF' }}
-                    contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', fontWeight: 'bold', color: '#374151' }}
+                    contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', fontWeight: 'bold', color: '#374151', backgroundColor: '#FFFFFF' }}
                     labelFormatter={(value, payload) => {
                       if (payload && payload.length > 0 && payload[0].payload.tooltipLabel) {
                         return payload[0].payload.tooltipLabel;
@@ -310,7 +321,6 @@ const Dashboard: React.FC = () => {
              </ResponsiveContainer>
            </div>
            
-           {/* Bottom Text Toggles (Legend) */}
            <div className="flex justify-center gap-8 mt-4 select-none">
               <button 
                 onClick={() => handleToggle('Profit')}

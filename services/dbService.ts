@@ -14,6 +14,9 @@ const STORAGE_KEYS = {
   SETTINGS: 'paw_settings',
 };
 
+// Default prices if none are set
+const DEFAULT_PRICES = [10, 50, 80, 130, 150, 160, 170, 180, 190, 200];
+
 class DBService {
   private get<T>(key: string, defaultValue: T): T {
     const data = localStorage.getItem(key);
@@ -46,7 +49,11 @@ class DBService {
       if (bales) this.set(STORAGE_KEYS.BALES, bales);
       if (transactions) this.set(STORAGE_KEYS.TRANSACTIONS, transactions);
       if (settings) {
-         this.set(STORAGE_KEYS.SETTINGS, { logoUrl: settings.logo_url, isDarkMode: settings.is_dark_mode });
+         this.set(STORAGE_KEYS.SETTINGS, { 
+             logoUrl: settings.logo_url, 
+             isDarkMode: settings.is_dark_mode,
+             presetPrices: settings.preset_prices || DEFAULT_PRICES
+         });
       }
 
       console.log('✅ Supabase Sync Complete');
@@ -56,22 +63,23 @@ class DBService {
     }
   }
 
-  // --- Settings (Logo & Dark Mode) ---
-  getSettings(): { logoUrl: string | null; isDarkMode: boolean } {
-    return this.get(STORAGE_KEYS.SETTINGS, { logoUrl: null, isDarkMode: false });
+  // --- Settings (Logo, Dark Mode, Prices) ---
+  getSettings(): { logoUrl: string | null; isDarkMode: boolean; presetPrices: number[] } {
+    return this.get(STORAGE_KEYS.SETTINGS, { logoUrl: null, isDarkMode: false, presetPrices: DEFAULT_PRICES });
   }
 
-  updateSettings(settings: Partial<{ logoUrl: string | null; isDarkMode: boolean }>): void {
+  updateSettings(settings: Partial<{ logoUrl: string | null; isDarkMode: boolean; presetPrices: number[] }>): void {
     const current = this.getSettings();
     const newSettings = { ...current, ...settings };
     this.set(STORAGE_KEYS.SETTINGS, newSettings);
 
     // Sync to Supabase Single Row Table
-    supabase.from('settings').upsert({
-       id: 1, // Enforce Singleton
-       logo_url: newSettings.logoUrl,
-       is_dark_mode: newSettings.isDarkMode
-    }).then(({ error }) => {
+    const updatePayload: any = { id: 1 };
+    if (newSettings.logoUrl !== undefined) updatePayload.logo_url = newSettings.logoUrl;
+    if (newSettings.isDarkMode !== undefined) updatePayload.is_dark_mode = newSettings.isDarkMode;
+    if (newSettings.presetPrices !== undefined) updatePayload.preset_prices = newSettings.presetPrices;
+
+    supabase.from('settings').upsert(updatePayload).then(({ error }) => {
        if (error) console.error('Supabase Error (Settings):', error);
     });
   }

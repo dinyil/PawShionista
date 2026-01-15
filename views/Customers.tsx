@@ -1,17 +1,109 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { db } from '../services/dbService';
+import { supabase } from '../services/supabaseClient';
 import { Customer, Order, PaymentStatus } from '../types';
 
 const Customers: React.FC = () => {
   const [customers, setCustomers] = useState(db.getCustomers());
+  const [allOrders, setAllOrders] = useState(db.getOrders());
   const [search, setSearch] = useState('');
   const [viewingHistory, setViewingHistory] = useState<Customer | null>(null);
 
-  const filtered = customers.filter(c => 
-    c.username.toLowerCase().includes(search.toLowerCase())
-  ).sort((a, b) => b.totalSpent - a.totalSpent);
+  // Real-time updates
+  useEffect(() => {
+    // Initial Load
+    setCustomers(db.getCustomers());
+    setAllOrders(db.getOrders());
+
+    // 1. Subscribe to Customers
+    const custChannel = supabase
+      .channel('customers_list_realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'customers' },
+        (payload) => {
+          if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
+             const updated = payload.new as Customer;
+             
+             // Update Local Storage
+             const current = db.getCustomers();
+             const index = current.findIndex(c => c.id === updated.id);
+             if (index > -1) current[index] = updated;
+             else current.push(updated);
+             localStorage.setItem('paw_customers', JSON.stringify(current));
+
+             // Update State
+             setCustomers(prev => {
+                const idx = prev.findIndex(c => c.id === updated.id);
+                if (idx > -1) {
+                   const next = [...prev];
+                   next[idx] = updated;
+                   return next;
+                }
+                return [updated, ...prev];
+             });
+          }
+        }
+      )
+      .subscribe();
+
+    // 2. Subscribe to Orders (to recalc stats dynamically)
+    const orderChannel = supabase
+      .channel('orders_list_realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders' },
+        () => {
+           // Fetch latest orders to ensure stats are accurate
+           supabase.from('orders').select('*').then(({ data }) => {
+              if (data) {
+                 const newOrders = data as Order[];
+                 localStorage.setItem('paw_orders', JSON.stringify(newOrders));
+                 setAllOrders(newOrders);
+              }
+           });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(custChannel);
+      supabase.removeChannel(orderChannel);
+    };
+  }, []);
+
+  // Calculate dynamic stats from actual orders
+  // This ensures that "Total Spent" matches the "History" exactly
+  const processedCustomers = useMemo(() => {
+     // Map of normalized username -> stats
+     const stats: Record<string, { spent: number, count: number }> = {};
+     
+     allOrders.forEach(o => {
+        // Skip cancelled orders for stats
+        if (o.shippingStatus === 'Cancelled') return;
+
+        const u = o.customerUsername.toLowerCase().trim();
+        if (!stats[u]) stats[u] = { spent: 0, count: 0 };
+        stats[u].spent += o.totalPrice;
+        stats[u].count += o.quantity;
+     });
+
+     return customers
+       .map(c => {
+          const u = c.username.toLowerCase().trim();
+          const s = stats[u] || { spent: 0, count: 0 };
+          // Override database aggregates with calculated values for display
+          return {
+             ...c,
+             totalSpent: s.spent,
+             orderCount: s.count
+          };
+       })
+       .filter(c => c.username.toLowerCase().includes(search.toLowerCase()))
+       .sort((a, b) => b.totalSpent - a.totalSpent);
+  }, [customers, allOrders, search]);
 
   const toggleVIP = (customer: Customer) => {
     const updated = { ...customer, isVIP: !customer.isVIP };
@@ -42,7 +134,7 @@ const Customers: React.FC = () => {
       </div>
 
       <div className="space-y-4 pb-20">
-        {filtered.map(c => (
+        {processedCustomers.map(c => (
           <div key={c.id} className={`rounded-[2rem] p-6 border-2 transition-all shadow-sm group hover:shadow-md ${
             c.isBlacklisted 
               ? 'bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-900/50' 
@@ -106,7 +198,7 @@ const Customers: React.FC = () => {
             </div>
           </div>
         ))}
-        {filtered.length === 0 && (
+        {processedCustomers.length === 0 && (
            <div className="text-center py-12 opacity-50">
              <div className="text-4xl mb-2">👥</div>
              <p className="font-bold text-gray-400 dark:text-gray-500 text-sm uppercase tracking-widest">No customers found</p>
@@ -142,14 +234,38 @@ interface HistoryGroup {
 }
 
 const CustomerHistoryModal: React.FC<{ customer: Customer; onClose: () => void }> = ({ customer, onClose }) => {
-  const orders = db.getOrders();
   const sessions = db.getSessions();
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
+  
+  // Use DB data directly for initial state to avoid flicker
+  const [localOrders, setLocalOrders] = useState<Order[]>(db.getOrders());
+
+  useEffect(() => {
+     const channel = supabase
+      .channel(`orders_history_${customer.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+          supabase.from('orders').select('*').then(({ data }) => {
+             if (data) {
+                 const newOrders = data as Order[];
+                 localStorage.setItem('paw_orders', JSON.stringify(newOrders));
+                 setLocalOrders(newOrders);
+             }
+          });
+      })
+      .subscribe();
+      
+      return () => { supabase.removeChannel(channel); };
+  }, [customer.id]);
 
   const history = useMemo(() => {
-     const userOrders = orders.filter(o => o.customerUsername === customer.username);
+     const targetUsername = customer.username.toLowerCase().trim();
      
-     // Group by Session ID to make it readable
+     const userOrders = localOrders.filter(o => {
+        // Exclude cancelled orders from history view too
+        if (o.shippingStatus === 'Cancelled') return false;
+        return o.customerUsername.toLowerCase().trim() === targetUsername;
+     });
+     
      const groups: Record<string, HistoryGroup> = {};
      
      userOrders.forEach(order => {
@@ -170,7 +286,6 @@ const CustomerHistoryModal: React.FC<{ customer: Customer; onClose: () => void }
         groups[order.sessionId].totalItems += order.quantity;
         groups[order.sessionId].totalAmount += order.totalPrice;
         
-        // Add item detail
         groups[order.sessionId].items.push({
            name: order.productName,
            qty: order.quantity,
@@ -178,14 +293,13 @@ const CustomerHistoryModal: React.FC<{ customer: Customer; onClose: () => void }
            isFreebie: order.isFreebie
         });
 
-        // Keep latest date for sorting
         if (order.createdAt > groups[order.sessionId].date) {
             groups[order.sessionId].date = order.createdAt;
         }
      });
 
      return Object.values(groups).sort((a, b) => b.date - a.date);
-  }, [customer, orders, sessions]);
+  }, [customer, localOrders, sessions]);
 
   const toggleSession = (sessionId: string) => {
     const next = new Set(expandedSessions);
@@ -193,6 +307,14 @@ const CustomerHistoryModal: React.FC<{ customer: Customer; onClose: () => void }
     else next.add(sessionId);
     setExpandedSessions(next);
   };
+
+  // Re-calculate the customer total stats purely for display in the Modal header 
+  // to ensure it matches the history list perfectly
+  const modalStats = useMemo(() => {
+      const totalSpent = history.reduce((sum, h) => sum + h.totalAmount, 0);
+      const totalOrders = history.reduce((sum, h) => sum + h.totalItems, 0);
+      return { totalSpent, totalOrders };
+  }, [history]);
 
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
@@ -213,11 +335,11 @@ const CustomerHistoryModal: React.FC<{ customer: Customer; onClose: () => void }
            <div className="flex gap-4 mt-6">
               <div className="bg-white/60 dark:bg-gray-600/50 rounded-xl p-3 flex-1">
                  <p className="text-[9px] font-black text-blue-900 dark:text-blue-200 uppercase tracking-widest">Lifetime Spend</p>
-                 <p className="text-lg font-black text-blue-950 dark:text-white">₱{customer.totalSpent.toLocaleString()}</p>
+                 <p className="text-lg font-black text-blue-950 dark:text-white">₱{modalStats.totalSpent.toLocaleString()}</p>
               </div>
               <div className="bg-white/60 dark:bg-gray-600/50 rounded-xl p-3 flex-1">
                  <p className="text-[9px] font-black text-blue-900 dark:text-blue-200 uppercase tracking-widest">Total Orders</p>
-                 <p className="text-lg font-black text-blue-950 dark:text-white">{customer.orderCount}</p>
+                 <p className="text-lg font-black text-blue-950 dark:text-white">{modalStats.totalOrders}</p>
               </div>
            </div>
         </div>
