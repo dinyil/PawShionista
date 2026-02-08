@@ -17,6 +17,7 @@ const Accounting: React.FC = () => {
   const walletBalances = useMemo(() => {
     const balances: Record<string, number> = {
       'GCash': 0,
+      'Maya': 0,
       'TikTok Checkout': 0,
       'GoTyme': 0,
       'SeaBank': 0,

@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react';
+
+import React, { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { db } from '../services/dbService';
 import { Order, PaymentStatus, ShippingStatus, LiveSession, PaymentMethod } from '../types';
-import { CartIcon, SearchIcon, PawIcon } from '../components/Icons';
+import { SearchIcon } from '../components/Icons';
 
 const OFF_LIVE_ID = 'OFF_LIVE';
 
@@ -100,6 +101,7 @@ const LogItem: React.FC<{ log: string }> = ({ log }) => {
   );
 };
 
+// --- Main Orders Component ---
 
 const Orders: React.FC = () => {
   const [selectedSession, setSelectedSession] = useState<LiveSession | null>(null);
@@ -110,9 +112,9 @@ const Orders: React.FC = () => {
   const [dateFilter, setDateFilter] = useState<'All' | 'Today' | 'Week' | 'Month' | 'Custom'>('All');
   const [customDate, setCustomDate] = useState('');
 
-  const [selectedOrder, setSelectedOrder] = useState<GroupedOrder | null>(null);
   const [allOrders, setAllOrders] = useState(db.getOrders());
   const [deleteTarget, setDeleteTarget] = useState<GroupedOrder | null>(null);
+  const [logTarget, setLogTarget] = useState<GroupedOrder | null>(null);
   
   const customers = db.getCustomers();
 
@@ -146,7 +148,6 @@ const Orders: React.FC = () => {
        const sDate = new Date(s.date);
        const now = new Date();
        
-       // Helper to check same day
        const isSameDay = (d1: Date, d2: Date) => 
          d1.getDate() === d2.getDate() && 
          d1.getMonth() === d2.getMonth() && 
@@ -193,7 +194,6 @@ const Orders: React.FC = () => {
         groups[key].amountPaid += o.amountPaid;
         groups[key].ids.push(o.id);
         groups[key].items.push(o);
-        // Combine logs if any
         if (o.logs) {
            groups[key].logs = [...(groups[key].logs || []), ...o.logs];
         }
@@ -201,10 +201,30 @@ const Orders: React.FC = () => {
     });
 
     return Object.values(groups).filter(g => {
-      if (orderFilter === 'Unpaid') return g.paymentStatus !== PaymentStatus.PAID; // Includes Unpaid and Partial
+      if (orderFilter === 'Unpaid') return g.paymentStatus !== PaymentStatus.PAID; 
       if (orderFilter === 'Paid') return g.paymentStatus === PaymentStatus.PAID;
       return true;
-    }).sort((a, b) => b.createdAt - a.createdAt);
+    }).sort((a, b) => {
+        // --- 1. SORT BY STATUS PRIORITY ---
+        // Priority: Unpaid (0) -> Paid (1) -> Paid+Shipped (2)
+        
+        const getRank = (o: GroupedOrder) => {
+            if (o.paymentStatus !== PaymentStatus.PAID) return 0; // Unpaid/Partial (Top)
+            if (o.shippingStatus === ShippingStatus.SHIPPED) return 2; // Paid & Shipped (Bottom)
+            return 1; // Paid Only (Middle)
+        };
+
+        const rankA = getRank(a);
+        const rankB = getRank(b);
+
+        if (rankA !== rankB) {
+            return rankA - rankB; // Ascending: 0 -> 1 -> 2
+        }
+
+        // --- 2. SORT BY DATE (Secondary) ---
+        // Newest first within same rank
+        return b.createdAt - a.createdAt;
+    });
   }, [allOrders, selectedSession, orderFilter, customers]);
 
   const handleUpdate = (updated: GroupedOrder, newLog?: string) => {
@@ -214,19 +234,16 @@ const Orders: React.FC = () => {
           let newItemPaidAmount = 0;
           
           if (updated.paymentStatus === PaymentStatus.PAID) {
-              // Exact match for full payment
               newItemPaidAmount = original.totalPrice;
           } else if (updated.paymentStatus === PaymentStatus.UNPAID) {
               newItemPaidAmount = 0;
           } else {
-              // Distribute proportional amount for Partial
               const totalGroupPrice = updated.items.reduce((sum, i) => sum + i.totalPrice, 0);
               const inputAmount = updated.amountPaid;
               const ratio = totalGroupPrice > 0 ? (inputAmount / totalGroupPrice) : 0;
               newItemPaidAmount = original.totalPrice * ratio;
           }
 
-          // Append Log
           const updatedLogs = original.logs ? [...original.logs] : [];
           if (newLog) updatedLogs.push(newLog);
 
@@ -242,7 +259,6 @@ const Orders: React.FC = () => {
        }
     });
     setAllOrders(db.getOrders());
-    setSelectedOrder(null);
   };
 
   const handleDelete = () => {
@@ -316,14 +332,11 @@ const Orders: React.FC = () => {
            ) : sessions.map(s => {
              const sessionOrders = allOrders.filter(o => o.sessionId === s.id);
              const sessionTotal = sessionOrders.reduce((sum,o) => sum + o.totalPrice, 0);
-             const sessionItems = sessionOrders.reduce((sum, o) => sum + o.quantity, 0); // Correctly sum quantity
+             const sessionItems = sessionOrders.reduce((sum, o) => sum + o.quantity, 0);
              
              return (
                <button key={s.id} onClick={() => setSelectedSession(s)} className="bg-white dark:bg-gray-800 rounded-[2.5rem] p-6 border-2 border-transparent hover:border-pawPink dark:hover:border-gray-600 transition-all shadow-sm hover:shadow-xl group text-left flex flex-col h-full relative overflow-hidden">
-                  
-                  {/* Decorative Background */}
                   <div className="absolute top-0 right-0 w-24 h-24 bg-pawPink/10 dark:bg-gray-700 rounded-bl-[3rem] -mr-4 -mt-4 transition-transform group-hover:scale-110"></div>
-
                   <div className="mb-6 relative z-10">
                     <div className="flex justify-between items-start mb-2">
                        <span className="flex items-center gap-2 text-[10px] font-black uppercase text-gray-400 dark:text-gray-400 bg-gray-50 dark:bg-gray-700 px-3 py-1 rounded-full tracking-widest">
@@ -337,7 +350,6 @@ const Orders: React.FC = () => {
                     </div>
                     <h3 className="font-black text-gray-800 dark:text-white text-xl leading-tight group-hover:text-pawPinkDark transition-colors line-clamp-2">{s.name}</h3>
                   </div>
-
                   <div className="mt-auto grid grid-cols-2 gap-3 relative z-10">
                      <div className="bg-pawSoftBlue/50 dark:bg-blue-900/30 p-3 rounded-2xl">
                         <p className="text-[9px] text-blue-600 dark:text-blue-300 font-black uppercase mb-0.5 tracking-wider">Items</p>
@@ -358,92 +370,62 @@ const Orders: React.FC = () => {
 
   // --- VIEW: ORDER DETAILS (Inside a Session) ---
   return (
-    <div className="space-y-6 pb-24 px-1 animate-fadeIn">
+    <div className="space-y-4 pb-24 px-1 animate-fadeIn">
       <button onClick={() => setSelectedSession(null)} className="flex items-center gap-2 text-[10px] font-black uppercase text-gray-400 bg-white dark:bg-gray-800 px-4 py-2 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm hover:text-pawPinkDark hover:border-pawPink transition-all">
         <span>← Back to Sessions</span>
       </button>
 
-      <div className="bg-white dark:bg-gray-800 rounded-[2.5rem] p-8 shadow-sm border-2 border-pawPink/20 dark:border-gray-700 mb-6 relative overflow-hidden transition-colors">
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+      {/* Header Info */}
+      <div className="bg-white dark:bg-gray-800 rounded-[2rem] p-6 shadow-sm border border-pawPink/20 dark:border-gray-700 relative overflow-hidden transition-colors">
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
                <span className="text-[10px] font-black bg-pawPinkDark text-white px-2 py-0.5 rounded uppercase tracking-wider">{selectedSession.date}</span>
                {selectedSession.isOpen && <span className="text-[10px] font-black bg-red-100 dark:bg-red-900/50 text-red-500 dark:text-red-300 px-2 py-0.5 rounded uppercase tracking-wider animate-pulse">Live</span>}
             </div>
-            <h1 className="text-3xl font-black text-gray-800 dark:text-white tracking-tight leading-none">{selectedSession.name}</h1>
+            <h1 className="text-2xl font-black text-gray-800 dark:text-white tracking-tight leading-none">{selectedSession.name}</h1>
           </div>
-          
-          <div className="flex bg-gray-50 dark:bg-gray-700 p-1.5 rounded-2xl border border-gray-100 dark:border-gray-600">
+          <div className="flex bg-gray-50 dark:bg-gray-700 p-1.5 rounded-xl border border-gray-100 dark:border-gray-600">
             {['All', 'Unpaid', 'Paid'].map(f => (
-              <button key={f} onClick={() => setOrderFilter(f)} className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all tracking-wider ${orderFilter === f ? 'bg-pawPinkDark text-white shadow-md' : 'text-gray-400 hover:text-gray-600 dark:text-gray-300 dark:hover:text-gray-100'}`}>{f}</button>
+              <button key={f} onClick={() => setOrderFilter(f)} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all tracking-wider ${orderFilter === f ? 'bg-pawPinkDark text-white shadow-md' : 'text-gray-400 hover:text-gray-600 dark:text-gray-300 dark:hover:text-gray-100'}`}>{f}</button>
             ))}
           </div>
         </div>
-        <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-br from-pawPink/20 dark:from-gray-700/30 to-transparent rounded-full -mr-20 -mt-20 pointer-events-none"></div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {/* HEADER ROW FOR LIST */}
+      {filteredOrders.length > 0 && (
+        <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[9px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-widest text-center select-none">
+           <div className="col-span-1">Date</div>
+           <div className="col-span-3 text-left pl-2">Customer / Total</div>
+           <div className="col-span-2">Ref No.</div>
+           <div className="col-span-2">Status</div>
+           <div className="col-span-2">Mode</div>
+           <div className="col-span-1">Ship</div>
+           <div className="col-span-1">Actions</div>
+        </div>
+      )}
+
+      {/* COMPACT ROWS */}
+      <div className="space-y-1">
         {filteredOrders.length === 0 ? (
-           <div className="col-span-full text-center py-20 opacity-50">
+           <div className="text-center py-20 opacity-50">
              <div className="text-4xl mb-2">🔍</div>
              <p className="font-bold text-gray-400 dark:text-gray-500 text-sm uppercase tracking-widest">No orders found for this filter</p>
            </div>
         ) : filteredOrders.map(group => (
-          <div key={group.ids[0]} className="bg-white dark:bg-gray-800 rounded-[2rem] p-6 border border-gray-100 dark:border-gray-700 shadow-sm hover:border-pawPink transition-all group">
-            <div className="flex justify-between items-start mb-4">
-               <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="w-8 h-8 rounded-full bg-pawSoftBlue dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 flex items-center justify-center font-black text-xs">
-                      {group.customerUsername.charAt(0).toUpperCase()}
-                    </div>
-                    <h4 className="font-black text-gray-800 dark:text-white text-lg tracking-tight leading-none">@{group.customerUsername}</h4>
-                  </div>
-                  <div className="flex gap-2 mt-2">
-                    {group.isCustomerVIP && (
-                      <span className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-wider">VIP</span>
-                    )}
-                    <p className="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase bg-gray-50 dark:bg-gray-700 px-2 py-0.5 rounded">{group.quantity} items</p>
-                  </div>
-                  <div className="mt-2 space-y-1">
-                     <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest bg-gray-50 dark:bg-gray-700 px-2 py-1 rounded inline-block">
-                        Session: {selectedSession?.name}
-                     </p>
-                     {group.referenceNumber && (
-                        <p className="text-[10px] font-bold text-gray-500 dark:text-gray-300 italic px-1">
-                           "{group.referenceNumber}"
-                        </p>
-                     )}
-                  </div>
-               </div>
-               <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-wider ${group.paymentStatus === 'Paid' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'}`}>{group.paymentStatus}</span>
-            </div>
-            
-            {/* Warning for Pending Shipping */}
-            {group.shippingStatus === ShippingStatus.PENDING && (
-              <div className="mb-3 inline-flex items-center gap-1.5 bg-orange-50 dark:bg-orange-900/20 px-3 py-1.5 rounded-lg border border-orange-100 dark:border-orange-800">
-                  <span className="text-xs">📦</span>
-                  <span className="text-[10px] font-black text-orange-600 dark:text-orange-300 uppercase tracking-wider">To Ship</span>
-              </div>
-            )}
-            
-            <div className="flex justify-between items-end mb-4 bg-gray-50 dark:bg-gray-700 p-4 rounded-2xl">
-               <span className="text-[10px] font-black text-gray-400 dark:text-gray-300 uppercase tracking-widest">Total</span>
-               <p className="text-2xl font-black text-gray-800 dark:text-white leading-none">₱{group.totalPrice.toLocaleString()}</p>
-            </div>
-            
-            <div className="flex gap-2">
-                <button onClick={() => setSelectedOrder(group)} className="flex-1 py-4 bg-gray-900 dark:bg-black text-white font-black rounded-2xl text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all group-hover:bg-pawPinkDark">Manage</button>
-                <button 
-                    onClick={() => setDeleteTarget(group)}
-                    className="w-14 flex items-center justify-center bg-gray-100 dark:bg-gray-700 text-gray-400 hover:bg-red-100 hover:text-red-500 rounded-2xl transition-colors"
-                >
-                    🗑️
-                </button>
-            </div>
-          </div>
+          <OrderRow 
+             key={group.ids[0]} 
+             order={group} 
+             onUpdate={handleUpdate} 
+             onDelete={() => setDeleteTarget(group)}
+             onViewLogs={() => setLogTarget(group)}
+          />
         ))}
       </div>
-      {selectedOrder && <StatusModal order={selectedOrder} onClose={() => setSelectedOrder(null)} onSave={handleUpdate} />}
+      
+      {logTarget && <HistoryModal order={logTarget} onClose={() => setLogTarget(null)} />}
+      
       {deleteTarget && (
          <DeleteOrderConfirmationModal 
             customer={deleteTarget.customerUsername} 
@@ -455,27 +437,208 @@ const Orders: React.FC = () => {
   );
 };
 
-const StatusModal = ({ order, onClose, onSave }: any) => {
-  // order is a GroupedOrder containing total values. 
-  const [formData, setFormData] = useState({
-      ...order,
-      paymentMethod: order.paymentMethod || PaymentMethod.GCASH,
-      referenceNumber: order.referenceNumber || '',
-      amountPaid: order.amountPaid || 0 
+// --- New OrderRow Component (Ultra Compact) ---
+interface OrderCardProps {
+  order: GroupedOrder;
+  onUpdate: (o: GroupedOrder, log: string) => void;
+  onDelete: () => void;
+  onViewLogs: () => void;
+}
+
+const OrderRow: React.FC<OrderCardProps> = ({ order, onUpdate, onDelete, onViewLogs }) => {
+  const [localData, setLocalData] = useState({
+      paymentStatus: order.paymentStatus,
+      amountPaid: order.amountPaid,
+      paymentMethod: order.paymentMethod || '',
+      shippingStatus: order.shippingStatus,
+      referenceNumber: order.referenceNumber || ''
   });
 
-  // Calculate unique logs from the group
+  useEffect(() => {
+      setLocalData({
+          paymentStatus: order.paymentStatus,
+          amountPaid: order.amountPaid,
+          paymentMethod: order.paymentMethod || '',
+          shippingStatus: order.shippingStatus,
+          referenceNumber: order.referenceNumber || ''
+      });
+  }, [order]);
+
+  const commitChange = (field: string, value: any) => {
+      const oldVal = (order as any)[field];
+      if (oldVal == value) return; 
+
+      const newData = { ...order, ...localData, [field]: value };
+      
+      // Auto logic
+      if (field === 'paymentStatus') {
+          if (value === PaymentStatus.PAID) newData.amountPaid = order.totalPrice;
+          if (value === PaymentStatus.UNPAID) newData.amountPaid = 0;
+      }
+      
+      // Implicit partial handling not fully exposed in UI but kept in logic
+      if (field === 'amountPaid') {
+          const num = parseFloat(value) || 0;
+          if (num >= order.totalPrice - 0.01) newData.paymentStatus = PaymentStatus.PAID;
+          else if (num > 0) newData.paymentStatus = PaymentStatus.PARTIAL;
+          else newData.paymentStatus = PaymentStatus.UNPAID;
+          newData.amountPaid = num;
+      }
+
+      const dateStr = new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      const log = `[${dateStr}] ${field}: ${oldVal} -> ${value}`;
+      
+      setLocalData({
+          paymentStatus: newData.paymentStatus,
+          amountPaid: newData.amountPaid,
+          paymentMethod: newData.paymentMethod || '',
+          shippingStatus: newData.shippingStatus,
+          referenceNumber: newData.referenceNumber || ''
+      });
+
+      // Prepare payload with correct types to fix "string not assignable to PaymentMethod" error
+      const payload: GroupedOrder = {
+        ...newData,
+        paymentMethod: (newData.paymentMethod === '' ? undefined : newData.paymentMethod) as PaymentMethod | undefined
+      };
+
+      onUpdate(payload, log);
+  };
+
+  // Determine Row Color Class based on Status Priority
+  const getRowColorClass = () => {
+      // 1. Paid AND Shipped -> Purple/Blue (Completed Status)
+      if (localData.paymentStatus === PaymentStatus.PAID && localData.shippingStatus === ShippingStatus.SHIPPED) {
+          return 'bg-purple-50 dark:bg-purple-900/20 border-purple-100 dark:border-purple-800';
+      }
+      // 2. Paid (implicitly Not Shipped based on priority 1) -> Green
+      if (localData.paymentStatus === PaymentStatus.PAID) {
+          return 'bg-green-50 dark:bg-green-900/20 border-green-100 dark:border-green-800';
+      }
+      // 3. Unpaid (implicitly doesn't matter if shipped or not) -> Red
+      return 'bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-800';
+  };
+
+  const getStatusTextColor = () => {
+      if (localData.paymentStatus === PaymentStatus.PAID) return 'text-green-900 dark:text-green-300';
+      if (localData.paymentStatus === PaymentStatus.PARTIAL) return 'text-orange-900 dark:text-orange-300';
+      return 'text-red-900 dark:text-red-300';
+  };
+
+  return (
+    <div className={`grid grid-cols-12 gap-2 items-center p-2 rounded-xl border ${getRowColorClass()} shadow-sm hover:shadow-md transition-all group text-xs`}>
+       
+       {/* 1. Date */}
+       <div className="col-span-1 text-center">
+          <p className="font-bold text-gray-500 dark:text-gray-400 leading-tight">
+             {new Date(order.createdAt).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric'})}
+          </p>
+          <p className="text-[8px] text-gray-400">{new Date(order.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
+       </div>
+
+       {/* 2. Customer & Total */}
+       <div className="col-span-3 flex items-center gap-2 overflow-hidden pl-1">
+          <div className="w-6 h-6 rounded-full bg-white dark:bg-gray-700 flex items-center justify-center font-black text-[9px] text-gray-600 dark:text-gray-300 border border-gray-100 dark:border-gray-600 shrink-0">
+             {order.customerUsername.charAt(0).toUpperCase()}
+          </div>
+          <div className="min-w-0">
+             <div className="font-black text-gray-800 dark:text-white truncate leading-none">@{order.customerUsername}</div>
+             <div className="text-[9px] font-bold text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                ₱{order.totalPrice.toLocaleString()} • {order.quantity} items
+                {order.isCustomerVIP && <span className="bg-yellow-400 text-white px-1 rounded-[2px] text-[8px] leading-tight ml-1">VIP</span>}
+             </div>
+          </div>
+       </div>
+
+       {/* 3. Ref No (Input) */}
+       <div className="col-span-2">
+          <input 
+             type="text"
+             value={localData.referenceNumber}
+             placeholder="Ref No."
+             onBlur={(e) => commitChange('referenceNumber', e.target.value)}
+             onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+             onChange={(e) => setLocalData({...localData, referenceNumber: e.target.value})}
+             className="w-full bg-white/50 dark:bg-black/20 border border-transparent focus:border-pawPink/50 hover:bg-white dark:hover:bg-black/40 rounded px-2 py-1 text-[10px] font-mono text-gray-900 dark:text-white outline-none placeholder:text-gray-400 transition-colors text-center"
+          />
+       </div>
+
+       {/* 4. Payment Status (Dropdown) */}
+       <div className="col-span-2 relative">
+          <select 
+             value={localData.paymentStatus}
+             onChange={(e) => commitChange('paymentStatus', e.target.value)}
+             className={`w-full bg-white/60 dark:bg-black/20 appearance-none text-center font-extrabold text-[10px] uppercase py-1 rounded cursor-pointer outline-none ${getStatusTextColor()}`}
+          >
+             {/* Only showing Paid and Unpaid options as requested */}
+             {[PaymentStatus.UNPAID, PaymentStatus.PAID].map(s => (
+                 <option key={s} value={s} className="text-gray-900 bg-white dark:text-white dark:bg-gray-800 font-bold">
+                    {s}
+                 </option>
+             ))}
+          </select>
+       </div>
+
+       {/* 5. Payment Method (Dropdown) */}
+       <div className="col-span-2">
+          <select 
+             value={localData.paymentMethod}
+             onChange={(e) => commitChange('paymentMethod', e.target.value)}
+             className="w-full bg-transparent text-center font-extrabold text-[10px] text-gray-900 dark:text-white outline-none border-b border-transparent hover:border-gray-300 focus:border-pawPink cursor-pointer py-1"
+          >
+             <option value="" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800">-</option>
+             {Object.values(PaymentMethod).map(m => (
+                 <option key={m} value={m} className="text-gray-900 bg-white dark:text-white dark:bg-gray-800">
+                    {m}
+                 </option>
+             ))}
+          </select>
+       </div>
+
+       {/* 6. Shipping (Icon/Dropdown Compact) */}
+       <div className="col-span-1 flex justify-center">
+           <select 
+              value={localData.shippingStatus}
+              onChange={(e) => commitChange('shippingStatus', e.target.value)}
+              className={`w-full bg-transparent text-center font-extrabold text-[9px] outline-none cursor-pointer ${localData.shippingStatus === 'Shipped' ? 'text-purple-900 dark:text-purple-300' : 'text-gray-600 dark:text-gray-400'}`}
+           >
+               <option value="Pending" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800">Wait</option>
+               <option value="Shipped" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800">Ship</option>
+               <option value="RTS" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800">RTS</option>
+               <option value="Cancelled" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800">Cancel</option>
+           </select>
+       </div>
+
+       {/* 7. Actions */}
+       <div className="col-span-1 flex justify-center gap-1">
+          <button 
+             onClick={onViewLogs}
+             className="text-gray-400 hover:text-blue-500 transition-colors w-5 h-5 flex items-center justify-center"
+             title="Logs"
+          >
+             📜
+          </button>
+          <button 
+             onClick={onDelete}
+             className="text-gray-400 hover:text-red-500 transition-colors w-5 h-5 flex items-center justify-center"
+             title="Delete"
+          >
+             🗑️
+          </button>
+       </div>
+    </div>
+  );
+};
+
+const HistoryModal = ({ order, onClose }: { order: GroupedOrder, onClose: () => void }) => {
+  // Calculate logs based on grouped items
   const uniqueLogs = useMemo(() => {
      if (!order.items) return [];
      const allLogs: string[] = [];
      order.items.forEach((o: Order) => {
          if (o.logs) allLogs.push(...o.logs);
      });
-     
-     // Deduplicate based on string content
      const uniqueSet = Array.from(new Set(allLogs));
-     
-     // Sort by Date extracted from string "[Date] Content" (Newest first)
      return uniqueSet.sort((a, b) => {
          const getDate = (s: string) => {
             const match = s.match(/^\[(.*?)\]/);
@@ -485,168 +648,24 @@ const StatusModal = ({ order, onClose, onSave }: any) => {
      });
   }, [order]);
 
-  const remainingBalance = Math.max(0, order.totalPrice - formData.amountPaid);
-
-  const handleAmountChange = (val: string) => {
-      const newAmount = val === '' ? 0 : parseFloat(val);
-      let newStatus = PaymentStatus.UNPAID;
-      
-      if (newAmount <= 0) {
-          newStatus = PaymentStatus.UNPAID;
-      } else if (newAmount >= order.totalPrice) {
-          newStatus = PaymentStatus.PAID;
-      } else {
-          newStatus = PaymentStatus.PARTIAL;
-      }
-
-      setFormData((prev: any) => ({
-          ...prev,
-          amountPaid: newAmount,
-          paymentStatus: newStatus
-      }));
-  };
-
-  const handleStatusChange = (newStatus: string) => {
-      let newAmount = formData.amountPaid;
-
-      if (newStatus === PaymentStatus.PAID) {
-          newAmount = order.totalPrice;
-      } else if (newStatus === PaymentStatus.UNPAID) {
-          newAmount = 0;
-      }
-
-      setFormData((prev: any) => ({
-          ...prev,
-          paymentStatus: newStatus as PaymentStatus,
-          amountPaid: newAmount
-      }));
-  };
-
-  const handleFullPayment = () => {
-      handleStatusChange(PaymentStatus.PAID);
-  };
-
-  const handleSaveClick = () => {
-      // Generate Audit Log string
-      const changes: string[] = [];
-      const dateStr = new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-
-      if (formData.paymentStatus !== order.paymentStatus) {
-          changes.push(`Status: ${order.paymentStatus} -> ${formData.paymentStatus}`);
-      }
-      if (formData.amountPaid !== order.amountPaid) {
-          changes.push(`Paid: ₱${order.amountPaid} -> ₱${formData.amountPaid}`);
-      }
-      if (formData.shippingStatus !== order.shippingStatus) {
-          changes.push(`Shipping: ${order.shippingStatus} -> ${formData.shippingStatus}`);
-      }
-      if (formData.referenceNumber !== order.referenceNumber) {
-          changes.push(`Ref: ${order.referenceNumber || 'None'} -> ${formData.referenceNumber}`);
-      }
-      
-      const logString = changes.length > 0 ? `[${dateStr}] ${changes.join(', ')}` : undefined;
-      
-      onSave(formData, logString);
-  };
-
   return createPortal(
-    <div className="fixed inset-0 z-[100] flex items-end md:items-center justify-center p-0 md:p-4 bg-black/40 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-white dark:bg-gray-800 w-full max-w-4xl rounded-t-[3rem] md:rounded-[3rem] overflow-hidden shadow-2xl animate-scaleUp max-h-[90vh] flex flex-col md:flex-row border-4 border-transparent dark:border-gray-700">
-        
-        {/* Left: Form */}
-        <div className="flex-1 flex flex-col">
-            <div className="bg-pawPink dark:bg-gray-700 p-8 shrink-0">
-                <div className="flex items-center gap-2">
-                    <h3 className="text-2xl font-black text-gray-800 dark:text-white uppercase tracking-tight">Order Update</h3>
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                    <p className="text-white font-black text-sm">@{order.customerUsername}</p>
-                    {order.isCustomerVIP && <span className="text-[9px] font-black bg-white dark:bg-gray-600 text-pawPinkDark dark:text-pink-300 px-1.5 rounded uppercase">VIP</span>}
-                </div>
-            </div>
-            <div className="p-8 space-y-4 overflow-y-auto custom-scrollbar flex-1">
-            {/* Payment Status & Details */}
-            <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2">
-                    <label className="text-[10px] font-black text-gray-400 dark:text-gray-400 uppercase ml-2 tracking-widest">Payment Status</label>
-                    <select 
-                        value={formData.paymentStatus} 
-                        onChange={(e) => handleStatusChange(e.target.value)} 
-                        className="w-full bg-pawCream dark:bg-gray-700 p-4 rounded-2xl font-black mt-1 text-gray-800 dark:text-white outline-none border-2 border-transparent focus:border-pawPinkDark"
-                    >
-                    {Object.values(PaymentStatus).map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                </div>
-                
-                <div>
-                    <label className="text-[10px] font-black text-gray-400 dark:text-gray-400 uppercase ml-2 tracking-widest">Method</label>
-                    <select value={formData.paymentMethod} onChange={(e) => setFormData({...formData, paymentMethod: e.target.value})} className="w-full bg-white dark:bg-gray-700 border-2 border-gray-100 dark:border-gray-600 focus:border-pawPinkDark p-4 rounded-2xl font-bold mt-1 text-gray-800 dark:text-white outline-none appearance-none">
-                    {Object.values(PaymentMethod).map(m => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                </div>
-
-                <div>
-                    <label className="text-[10px] font-black text-gray-400 dark:text-gray-400 uppercase ml-2 tracking-widest">Ref No.</label>
-                    <input 
-                        type="text" 
-                        placeholder="Optional" 
-                        value={formData.referenceNumber} 
-                        onChange={(e) => setFormData({...formData, referenceNumber: e.target.value})} 
-                        className="w-full bg-white dark:bg-gray-700 border-2 border-gray-100 dark:border-gray-600 focus:border-pawPinkDark p-4 rounded-2xl font-bold mt-1 text-gray-800 dark:text-white outline-none" 
-                    />
-                </div>
-
-                <div className="col-span-2 bg-gray-50 dark:bg-gray-700 p-4 rounded-2xl border border-gray-100 dark:border-gray-600">
-                    <div className="flex justify-between items-center mb-2">
-                        <label className="text-[10px] font-black text-gray-400 dark:text-gray-300 uppercase tracking-widest">Amount Paid</label>
-                        <button onClick={handleFullPayment} className="text-[9px] font-black text-blue-600 dark:text-blue-300 uppercase bg-blue-50 dark:bg-blue-900/30 px-2 py-1 rounded hover:bg-blue-100 transition-colors">Set Full</button>
-                    </div>
-                    <div className="flex items-center">
-                        <span className="text-gray-400 dark:text-gray-500 font-black text-lg mr-2">₱</span>
-                        <input 
-                            type="number" 
-                            value={formData.amountPaid === 0 ? '' : formData.amountPaid} 
-                            placeholder="0"
-                            onChange={(e) => handleAmountChange(e.target.value)} 
-                            className="w-full bg-transparent font-black text-2xl text-gray-900 dark:text-white outline-none placeholder:text-gray-300" 
-                        />
-                    </div>
-                    <div className="mt-2 text-right">
-                        <span className="text-[10px] font-bold text-gray-400 dark:text-gray-400 uppercase">Total Due: ₱{order.totalPrice.toLocaleString()}</span>
-                    </div>
-                </div>
-
-                <div className="col-span-2">
-                    <label className="text-[10px] font-black text-gray-400 dark:text-gray-400 uppercase ml-2 tracking-widest">Shipping Status</label>
-                    <select value={formData.shippingStatus} onChange={(e) => setFormData({...formData, shippingStatus: e.target.value})} className="w-full bg-pawCream dark:bg-gray-700 p-4 rounded-2xl font-black mt-1 text-gray-800 dark:text-white outline-none border-2 border-transparent focus:border-pawPinkDark">
-                    {Object.values(ShippingStatus).map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                </div>
-            </div>
-
-            <div className="flex gap-3 pt-4 mt-auto">
-                <button onClick={onClose} className="flex-1 py-4 bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-300 font-black uppercase text-xs tracking-widest rounded-2xl active:scale-95 transition-all">Cancel</button>
-                <button onClick={handleSaveClick} className="flex-1 py-4 bg-pawPinkDark text-white font-black uppercase text-xs tracking-widest rounded-2xl shadow-lg active:scale-95 transition-all">Save Changes</button>
-            </div>
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm animate-fadeIn">
+       <div className="bg-white dark:bg-gray-800 w-full max-w-md rounded-[2.5rem] overflow-hidden shadow-2xl animate-scaleUp max-h-[80vh] flex flex-col">
+          <div className="bg-pawSoftBlue dark:bg-slate-700 p-6 flex justify-between items-center shrink-0">
+             <div>
+                <h3 className="text-xl font-black text-blue-950 dark:text-blue-100 uppercase tracking-tight">Audit Log</h3>
+                <p className="text-xs font-bold text-blue-500 dark:text-blue-300">@{order.customerUsername}</p>
+             </div>
+             <button onClick={onClose} className="bg-white dark:bg-gray-600 text-blue-900 dark:text-blue-100 w-8 h-8 rounded-full font-black flex items-center justify-center shadow-sm">✕</button>
           </div>
-        </div>
-
-        {/* Right: Audit Log */}
-        <div className="md:w-80 bg-gray-50 dark:bg-gray-900 border-l-4 border-white dark:border-gray-700 flex flex-col h-[300px] md:h-auto">
-            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-               <h4 className="font-black text-gray-800 dark:text-white uppercase tracking-tight">Audit Log</h4>
-               <p className="text-xs text-gray-400 dark:text-gray-500 font-bold">History of changes</p>
-            </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
-               {uniqueLogs.length === 0 ? (
-                  <p className="text-center text-gray-400 text-xs py-10">No history available</p>
-               ) : uniqueLogs.map((log: string, i: number) => (
-                  <LogItem key={i} log={log} />
-               ))}
-            </div>
-        </div>
-
-      </div>
+          <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar bg-gray-50 dark:bg-gray-900">
+             {uniqueLogs.length === 0 ? (
+                <p className="text-center text-gray-400 text-xs py-10 font-bold uppercase tracking-widest">No history available</p>
+             ) : uniqueLogs.map((log: string, i: number) => (
+                <LogItem key={i} log={log} />
+             ))}
+          </div>
+       </div>
     </div>, document.body
   );
 };

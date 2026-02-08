@@ -14,6 +14,7 @@ export enum ShippingStatus {
 
 export enum PaymentMethod {
   GCASH = 'GCash',
+  MAYA = 'Maya',
   TIKTOK = 'TikTok Checkout',
   GOTYME = 'GoTyme',
   SEABANK = 'SeaBank',
