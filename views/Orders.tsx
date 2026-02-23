@@ -393,6 +393,52 @@ const Orders: React.FC = () => {
         </div>
       </div>
 
+      {/* Payment Summary */}
+      {(() => {
+         const sessionOrders = allOrders.filter(o => o.sessionId === selectedSession.id);
+         const totalAmountSale = sessionOrders.reduce((sum, o) => sum + o.totalPrice, 0);
+         const gcashPayments = sessionOrders.filter(o => o.paymentMethod === PaymentMethod.GCASH).reduce((sum, o) => sum + o.amountPaid, 0);
+         const tiktokPayments = sessionOrders.filter(o => o.paymentMethod === PaymentMethod.TIKTOK).reduce((sum, o) => sum + o.amountPaid, 0);
+         const gotymePayments = sessionOrders.filter(o => o.paymentMethod === PaymentMethod.GOTYME).reduce((sum, o) => sum + o.amountPaid, 0);
+         const seabankPayments = sessionOrders.filter(o => o.paymentMethod === PaymentMethod.SEABANK).reduce((sum, o) => sum + o.amountPaid, 0);
+         const bpiPayments = sessionOrders.filter(o => o.paymentMethod === PaymentMethod.BPI).reduce((sum, o) => sum + o.amountPaid, 0);
+
+         return (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 pb-4 pt-2 px-1">
+               <div className="bg-gray-900 dark:bg-black p-3.5 rounded-2xl flex flex-col justify-center items-start shadow-md border border-gray-800 relative overflow-hidden group">
+                  <div className="absolute -right-4 -top-4 w-12 h-12 bg-white/10 rounded-full blur-xl group-hover:bg-pawPink/20 transition-all"></div>
+                  <span className="text-[9px] font-black uppercase text-gray-400 mb-1 tracking-widest">Total Sales</span>
+                  <span className="text-xl font-black text-white">₱{totalAmountSale.toLocaleString()}</span>
+               </div>
+               
+               <div className="bg-blue-50 dark:bg-blue-900/20 p-3.5 rounded-2xl flex flex-col justify-center items-start border border-blue-100 dark:border-blue-800/50 shadow-sm transition-colors hover:border-blue-300">
+                  <span className="text-[9px] font-black uppercase text-blue-500 dark:text-blue-400 mb-1 tracking-widest">GCash</span>
+                  <span className="text-lg font-black text-blue-900 dark:text-blue-100">₱{gcashPayments.toLocaleString()}</span>
+               </div>
+               
+               <div className="bg-fuchsia-50 dark:bg-fuchsia-900/20 p-3.5 rounded-2xl flex flex-col justify-center items-start border border-fuchsia-100 dark:border-fuchsia-800/50 shadow-sm transition-colors hover:border-fuchsia-300">
+                  <span className="text-[9px] font-black uppercase text-fuchsia-500 dark:text-fuchsia-400 mb-1 tracking-widest">TikTok</span>
+                  <span className="text-lg font-black text-fuchsia-900 dark:text-fuchsia-100">₱{tiktokPayments.toLocaleString()}</span>
+               </div>
+               
+               <div className="bg-cyan-50 dark:bg-cyan-900/20 p-3.5 rounded-2xl flex flex-col justify-center items-start border border-cyan-100 dark:border-cyan-800/50 shadow-sm transition-colors hover:border-cyan-300">
+                  <span className="text-[9px] font-black uppercase text-cyan-600 dark:text-cyan-400 mb-1 tracking-widest">GoTyme</span>
+                  <span className="text-lg font-black text-cyan-900 dark:text-cyan-100">₱{gotymePayments.toLocaleString()}</span>
+               </div>
+               
+               <div className="bg-orange-50 dark:bg-orange-900/20 p-3.5 rounded-2xl flex flex-col justify-center items-start border border-orange-100 dark:border-orange-800/50 shadow-sm transition-colors hover:border-orange-300">
+                  <span className="text-[9px] font-black uppercase text-orange-500 dark:text-orange-400 mb-1 tracking-widest">SeaBank</span>
+                  <span className="text-lg font-black text-orange-900 dark:text-orange-100">₱{seabankPayments.toLocaleString()}</span>
+               </div>
+               
+               <div className="bg-red-50 dark:bg-red-900/20 p-3.5 rounded-2xl flex flex-col justify-center items-start border border-red-100 dark:border-red-800/50 shadow-sm transition-colors hover:border-red-300">
+                  <span className="text-[9px] font-black uppercase text-red-500 dark:text-red-400 mb-1 tracking-widest">BPI</span>
+                  <span className="text-lg font-black text-red-900 dark:text-red-100">₱{bpiPayments.toLocaleString()}</span>
+               </div>
+            </div>
+         );
+      })()}
+
       {/* HEADER ROW FOR LIST */}
       {filteredOrders.length > 0 && (
         <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[9px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-widest text-center select-none">

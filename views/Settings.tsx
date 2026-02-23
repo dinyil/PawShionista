@@ -4,12 +4,14 @@ import { useSettings } from '../services/SettingsContext';
 import { PawIcon, PlusIcon, GripIcon } from '../components/Icons';
 
 const Settings: React.FC = () => {
-  const { logoUrl, updateLogo, isDarkMode, toggleDarkMode, presetPrices, updatePresetPrices } = useSettings();
+  const { logoUrl, updateLogo, isDarkMode, toggleDarkMode, presetPrices, updatePresetPrices, expenseCategories, updateExpenseCategories } = useSettings();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [newPrice, setNewPrice] = useState('');
+  const [newCategory, setNewCategory] = useState('');
   
   // Local state for smooth UI updates before saving to DB
   const [localPrices, setLocalPrices] = useState<number[]>(presetPrices);
+  const [localCategories, setLocalCategories] = useState<string[]>(expenseCategories);
   const [isDragging, setIsDragging] = useState(false);
   
   // Refs to track positions without triggering re-renders for the drag logic itself
@@ -24,6 +26,10 @@ const Settings: React.FC = () => {
   useEffect(() => {
     setLocalPrices(presetPrices);
   }, [presetPrices]);
+
+  useEffect(() => {
+    setLocalCategories(expenseCategories);
+  }, [expenseCategories]);
 
   // --- FLIP Animation Logic ---
   const snapshotPositions = () => {
@@ -98,6 +104,47 @@ const Settings: React.FC = () => {
     updatePresetPrices(updated);
   };
 
+  const [editingCategory, setEditingCategory] = useState<{old: string, new: string} | null>(null);
+
+  const handleAddCategory = () => {
+    const val = newCategory.trim();
+    if (val !== '') {
+      if (!localCategories.includes(val)) {
+        const updated = [...localCategories, val].sort();
+        setLocalCategories(updated);
+        updateExpenseCategories(updated);
+      }
+      setNewCategory('');
+    }
+  };
+
+  const handleRemoveCategory = (categoryToRemove: string) => {
+    const updated = localCategories.filter(c => c !== categoryToRemove);
+    setLocalCategories(updated);
+    updateExpenseCategories(updated);
+  };
+
+  const handleEditCategoryStart = (category: string) => {
+    setEditingCategory({ old: category, new: category });
+  };
+
+  const handleEditCategorySave = () => {
+    if (editingCategory) {
+      const val = editingCategory.new.trim();
+      if (val !== '' && val !== editingCategory.old) {
+        // Only update if it's a new name and not empty
+        const updated = localCategories.map(c => c === editingCategory.old ? val : c).sort();
+        setLocalCategories(updated);
+        updateExpenseCategories(updated);
+      }
+      setEditingCategory(null);
+    }
+  };
+
+  const handleEditCategoryCancel = () => {
+    setEditingCategory(null);
+  };
+
   // --- Real-Time Sort Logic ---
 
   const handleDragStart = (e: React.DragEvent, position: number) => {
@@ -152,6 +199,25 @@ const Settings: React.FC = () => {
         const defaults = [10, 50, 80, 130, 150, 160, 170, 180, 190, 200];
         setLocalPrices(defaults);
         updatePresetPrices(defaults);
+    }
+  };
+
+  const handleResetCategories = () => {
+    if(confirm("Reset to default category list?")) {
+        const defaults = [
+          'Inventory Restock', 
+          'Shipping Fee', 
+          'Packaging', 
+          'Rent', 
+          'Utilities', 
+          'Salary', 
+          'Personal Withdrawal', 
+          'Loan',
+          'Capital',
+          'Miscellaneous'
+        ].sort();
+        setLocalCategories(defaults);
+        updateExpenseCategories(defaults);
     }
   };
 
@@ -277,6 +343,82 @@ const Settings: React.FC = () => {
                                 >
                                     ✕
                                 </button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+
+            {/* Expense Categories Config */}
+            <div className="bg-white dark:bg-gray-800 rounded-[3rem] p-8 border-2 border-pawPink/30 dark:border-gray-700 shadow-sm flex-1">
+                <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-4">
+                        <div className="bg-orange-100 dark:bg-orange-900/30 p-3 rounded-2xl">
+                        <span className="text-2xl">🧾</span>
+                        </div>
+                        <div>
+                        <h3 className="text-xl font-black text-gray-800 dark:text-white tracking-tight">Expense Categories</h3>
+                        <p className="text-xs font-bold text-gray-400">Manage categories for accounting.</p>
+                        </div>
+                    </div>
+                    <button onClick={handleResetCategories} className="text-[10px] font-black uppercase text-gray-400 hover:text-pawPinkDark transition-colors">Reset Defaults</button>
+                </div>
+
+                <div className="bg-gray-50 dark:bg-gray-900 rounded-[2rem] p-6 border-2 border-dashed border-gray-300 dark:border-gray-700">
+                    <div className="flex gap-2 mb-4">
+                        <input 
+                            type="text" 
+                            placeholder="New Category..." 
+                            value={newCategory}
+                            onChange={(e) => setNewCategory(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleAddCategory()}
+                            className="w-full bg-white dark:bg-gray-800 px-4 py-3 rounded-2xl font-black text-gray-800 dark:text-white outline-none border-2 border-transparent focus:border-pawPinkDark transition-all"
+                        />
+                        <button onClick={handleAddCategory} className="bg-pawPinkDark text-white px-4 rounded-2xl shadow-md active:scale-95 hover:bg-red-400 transition-colors">
+                            <PlusIcon className="w-6 h-6" />
+                        </button>
+                    </div>
+                    
+                    <div className="flex flex-wrap gap-2 min-h-[50px] items-start content-start relative">
+                        {localCategories.map((category) => (
+                            <div 
+                                key={category}
+                                className="group relative pl-3 pr-1 py-1 bg-white dark:bg-gray-700 text-gray-800 dark:text-white rounded-xl font-black text-xs shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-1 h-[42px] hover:border-pawPinkDark hover:shadow-md select-none transition-shadow"
+                            >
+                                {editingCategory?.old === category ? (
+                                    <div className="flex items-center gap-1">
+                                        <input
+                                            type="text"
+                                            value={editingCategory.new}
+                                            onChange={(e) => setEditingCategory({ ...editingCategory, new: e.target.value })}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') handleEditCategorySave();
+                                                if (e.key === 'Escape') handleEditCategoryCancel();
+                                            }}
+                                            autoFocus
+                                            className="bg-transparent outline-none w-24 text-xs font-black border-b border-pawPinkDark"
+                                        />
+                                        <button onClick={handleEditCategorySave} className="text-green-500 hover:text-green-600 ml-1">✓</button>
+                                        <button onClick={handleEditCategoryCancel} className="text-gray-400 hover:text-gray-600">✕</button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <span 
+                                            className="mx-1 cursor-pointer hover:text-pawPinkDark"
+                                            onClick={() => handleEditCategoryStart(category)}
+                                            title="Click to edit"
+                                        >
+                                            {category}
+                                        </span>
+
+                                        <button 
+                                            onClick={() => handleRemoveCategory(category)}
+                                            className="w-5 h-5 bg-gray-100 dark:bg-gray-600 rounded-full flex items-center justify-center text-[8px] text-gray-400 hover:bg-red-500 hover:text-white transition-colors ml-1"
+                                        >
+                                            ✕
+                                        </button>
+                                    </>
+                                )}
                             </div>
                         ))}
                     </div>

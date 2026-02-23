@@ -9,6 +9,8 @@ interface SettingsContextType {
   toggleDarkMode: () => void;
   presetPrices: number[];
   updatePresetPrices: (prices: number[]) => void;
+  expenseCategories: string[];
+  updateExpenseCategories: (categories: string[]) => void;
   refreshSettings: () => void;
 }
 
@@ -18,6 +20,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
   const [presetPrices, setPresetPrices] = useState<number[]>([]);
+  const [expenseCategories, setExpenseCategories] = useState<string[]>([]);
 
   // Initial load
   useEffect(() => {
@@ -25,6 +28,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setLogoUrl(saved.logoUrl);
     setIsDarkMode(saved.isDarkMode);
     setPresetPrices(saved.presetPrices || []);
+    setExpenseCategories(db.getExpenseCategories());
   }, []);
 
   useEffect(() => {
@@ -53,16 +57,22 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     db.updateSettings({ presetPrices: prices });
   };
 
+  const updateExpenseCategories = (categories: string[]) => {
+    setExpenseCategories(categories);
+    db.setExpenseCategories(categories);
+  };
+
   // Called after Supabase sync to update UI state
   const refreshSettings = useCallback(() => {
     const saved = db.getSettings();
     setLogoUrl(saved.logoUrl);
     setIsDarkMode(saved.isDarkMode);
     setPresetPrices(saved.presetPrices || []);
+    setExpenseCategories(db.getExpenseCategories());
   }, []);
 
   return (
-    <SettingsContext.Provider value={{ logoUrl, updateLogo, isDarkMode, toggleDarkMode, presetPrices, updatePresetPrices, refreshSettings }}>
+    <SettingsContext.Provider value={{ logoUrl, updateLogo, isDarkMode, toggleDarkMode, presetPrices, updatePresetPrices, expenseCategories, updateExpenseCategories, refreshSettings }}>
       {children}
     </SettingsContext.Provider>
   );

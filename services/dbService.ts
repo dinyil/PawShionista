@@ -54,6 +54,9 @@ class DBService {
              isDarkMode: settings.is_dark_mode,
              presetPrices: settings.preset_prices || DEFAULT_PRICES
          });
+         if (settings.expense_categories) {
+             this.set(STORAGE_KEYS.CATEGORIES, settings.expense_categories);
+         }
       }
 
       console.log('✅ Supabase Sync Complete');
@@ -292,9 +295,9 @@ class DBService {
     supabase.from('transactions').insert(tx).then();
   }
   
-  // --- Categories (Keep local for now, could be its own table) ---
+  // --- Categories ---
   getExpenseCategories(): string[] {
-    const stored = this.get(STORAGE_KEYS.CATEGORIES, [
+    return this.get(STORAGE_KEYS.CATEGORIES, [
       'Inventory Restock', 
       'Shipping Fee', 
       'Packaging', 
@@ -305,19 +308,25 @@ class DBService {
       'Loan',
       'Capital',
       'Miscellaneous'
-    ]);
-    const transactions = this.getTransactions();
-    const usedCategories = new Set(transactions.map(t => t.category));
-    const combined = Array.from(new Set([...stored, ...usedCategories])).filter(c => c && c.trim() !== '');
-    return combined.sort();
+    ]).sort();
   }
 
   addExpenseCategory(category: string): void {
     const categories = this.getExpenseCategories();
     if (!categories.includes(category) && category.trim() !== '') {
       categories.push(category);
-      this.set(STORAGE_KEYS.CATEGORIES, categories.sort());
+      this.setExpenseCategories(categories);
     }
+  }
+
+  setExpenseCategories(categories: string[]): void {
+    const sorted = [...categories].sort();
+    this.set(STORAGE_KEYS.CATEGORIES, sorted);
+    
+    // Sync to Supabase Settings table
+    supabase.from('settings').upsert({ id: 1, expense_categories: sorted }).then(({ error }) => {
+       if (error) console.error('Supabase Error (Settings Categories):', error);
+    });
   }
 
   // --- Bales ---
