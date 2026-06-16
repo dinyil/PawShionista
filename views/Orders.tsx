@@ -180,13 +180,15 @@ const Orders: React.FC = () => {
     const vipMap = new Map(customers.map(c => [c.username, c.isVIP]));
 
     base.forEach(o => {
-      const key = o.customerUsername;
+      // Group by productId (or fallback to id if missing) to separate by bale
+      const key = o.productId || o.id;
       if (!groups[key]) {
         groups[key] = { 
             ...o, 
             ids: [o.id], 
             items: [o],
-            isCustomerVIP: vipMap.get(o.customerUsername) || false
+            isCustomerVIP: vipMap.get(o.customerUsername) || false,
+            walletPayments: o.walletPayments ? { ...o.walletPayments } : undefined
         };
       } else {
         groups[key].quantity += o.quantity;
@@ -194,6 +196,14 @@ const Orders: React.FC = () => {
         groups[key].amountPaid += o.amountPaid;
         groups[key].ids.push(o.id);
         groups[key].items.push(o);
+        if (o.walletPayments) {
+          if (!groups[key].walletPayments) {
+            groups[key].walletPayments = {};
+          }
+          Object.entries(o.walletPayments).forEach(([wallet, amt]) => {
+            groups[key].walletPayments![wallet] = (groups[key].walletPayments![wallet] || 0) + amt;
+          });
+        }
         if (o.logs) {
            groups[key].logs = [...(groups[key].logs || []), ...o.logs];
         }
@@ -244,6 +254,16 @@ const Orders: React.FC = () => {
               newItemPaidAmount = original.totalPrice * ratio;
           }
 
+          let itemWalletPayments: Record<string, number> | undefined = undefined;
+          if (updated.walletPayments) {
+             itemWalletPayments = {};
+             const totalGroupPrice = updated.items.reduce((sum, i) => sum + i.totalPrice, 0);
+             const ratio = totalGroupPrice > 0 ? (original.totalPrice / totalGroupPrice) : 0;
+             Object.entries(updated.walletPayments).forEach(([wallet, amt]) => {
+                itemWalletPayments![wallet] = Math.round(amt * ratio * 100) / 100;
+             });
+          }
+
           const updatedLogs = original.logs ? [...original.logs] : [];
           if (newLog) updatedLogs.push(newLog);
 
@@ -254,6 +274,7 @@ const Orders: React.FC = () => {
               paymentMethod: updated.paymentMethod,
               referenceNumber: updated.referenceNumber,
               amountPaid: newItemPaidAmount,
+              walletPayments: itemWalletPayments,
               logs: updatedLogs
           });
        }
@@ -443,7 +464,7 @@ const Orders: React.FC = () => {
       {filteredOrders.length > 0 && (
         <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[9px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-widest text-center select-none">
            <div className="col-span-1">Date</div>
-           <div className="col-span-3 text-left pl-2">Customer / Total</div>
+           <div className="col-span-3 text-left pl-2">Featured Bale / Item</div>
            <div className="col-span-2">Ref No.</div>
            <div className="col-span-2">Status</div>
            <div className="col-span-2">Mode</div>
@@ -474,7 +495,13 @@ const Orders: React.FC = () => {
       
       {deleteTarget && (
          <DeleteOrderConfirmationModal 
-            customer={deleteTarget.customerUsername} 
+            customer={
+               (() => {
+                  const product = db.getProducts().find(p => p.id === deleteTarget.productId);
+                  const baleObj = product ? db.getBales().find(b => b.id === product.baleBatch) : null;
+                  return baleObj ? baleObj.name : (deleteTarget.customerUsername === 'Live-Summary' ? 'Consolidated Live Sale' : `@${deleteTarget.customerUsername}`);
+               })()
+            } 
             onConfirm={handleDelete}
             onClose={() => setDeleteTarget(null)}
          />
@@ -492,12 +519,26 @@ interface OrderCardProps {
 }
 
 const OrderRow: React.FC<OrderCardProps> = ({ order, onUpdate, onDelete, onViewLogs }) => {
+  const { displayName, isLiveSummary } = useMemo(() => {
+    const product = db.getProducts().find(p => p.id === order.productId);
+    const baleObj = product ? db.getBales().find(b => b.id === product.baleBatch) : null;
+    const isLive = order.customerUsername === 'Live-Summary';
+    return {
+      displayName: baleObj ? baleObj.name : (isLive ? 'Consolidated Live Sale' : `@${order.customerUsername}`),
+      isLiveSummary: isLive
+    };
+  }, [order.productId, order.customerUsername]);
+
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+
   const [localData, setLocalData] = useState({
       paymentStatus: order.paymentStatus,
       amountPaid: order.amountPaid,
       paymentMethod: order.paymentMethod || '',
       shippingStatus: order.shippingStatus,
-      referenceNumber: order.referenceNumber || ''
+      referenceNumber: order.referenceNumber || '',
+      walletPayments: (order.walletPayments || {}) as Record<string, number>
   });
 
   useEffect(() => {
@@ -506,9 +547,68 @@ const OrderRow: React.FC<OrderCardProps> = ({ order, onUpdate, onDelete, onViewL
           amountPaid: order.amountPaid,
           paymentMethod: order.paymentMethod || '',
           shippingStatus: order.shippingStatus,
-          referenceNumber: order.referenceNumber || ''
+          referenceNumber: order.referenceNumber || '',
+          walletPayments: (order.walletPayments || {}) as Record<string, number>
       });
   }, [order]);
+
+  const totalPaidFromWallets = useMemo(() => {
+     const payments = localData.walletPayments || {};
+     return Object.values(payments).reduce((sum, val) => sum + (Number(val) || 0), 0);
+  }, [localData.walletPayments]);
+
+  const handleWalletPaymentChange = (walletName: string, amountString: string) => {
+     const cleanVal = amountString === '' ? 0 : Math.max(0, parseFloat(amountString) || 0);
+     const newWallets = { ...localData.walletPayments, [walletName]: cleanVal };
+     
+     if (cleanVal === 0) {
+        delete newWallets[walletName];
+     }
+
+     const newTotalPaid = Object.values(newWallets).reduce((sum, val) => sum + (Number(val) || 0), 0);
+     
+     let newStatus = localData.paymentStatus;
+     if (newTotalPaid >= order.totalPrice - 0.01) {
+        newStatus = PaymentStatus.PAID;
+     } else if (newTotalPaid > 0) {
+        newStatus = PaymentStatus.PARTIAL;
+     } else {
+        newStatus = PaymentStatus.UNPAID;
+     }
+
+     const activeWallets = Object.keys(newWallets);
+     const primaryMethod = activeWallets.length === 1 ? activeWallets[0] as PaymentMethod : undefined;
+
+     const dateStr = new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+     const log = `[${dateStr}] Wallet split payment update total: ₱${newTotalPaid}`;
+
+     setLocalData(prev => ({
+        ...prev,
+        walletPayments: newWallets,
+        amountPaid: newTotalPaid,
+        paymentStatus: newStatus,
+        paymentMethod: primaryMethod || prev.paymentMethod
+     }));
+
+     onUpdate({
+        ...order,
+        walletPayments: newWallets,
+        amountPaid: newTotalPaid,
+        paymentStatus: newStatus,
+        paymentMethod: primaryMethod as PaymentMethod | undefined,
+        shippingStatus: localData.shippingStatus,
+        referenceNumber: localData.referenceNumber
+     }, log);
+  };
+
+  const handleSetFullWallet = (walletName: string) => {
+     const otherWalletsSum = Object.entries(localData.walletPayments || {}).reduce((sum, [name, val]) => {
+        if (name === walletName) return sum;
+        return sum + (Number(val) || 0);
+     }, 0);
+     const remaining = Math.max(0, order.totalPrice - otherWalletsSum);
+     handleWalletPaymentChange(walletName, remaining.toString());
+  };
 
   const commitChange = (field: string, value: any) => {
       const oldVal = (order as any)[field];
@@ -516,13 +616,18 @@ const OrderRow: React.FC<OrderCardProps> = ({ order, onUpdate, onDelete, onViewL
 
       const newData = { ...order, ...localData, [field]: value };
       
-      // Auto logic
       if (field === 'paymentStatus') {
-          if (value === PaymentStatus.PAID) newData.amountPaid = order.totalPrice;
-          if (value === PaymentStatus.UNPAID) newData.amountPaid = 0;
+          if (value === PaymentStatus.PAID) {
+             newData.amountPaid = order.totalPrice;
+             const method = localData.paymentMethod || 'Cash';
+             newData.walletPayments = { [method]: order.totalPrice };
+          }
+          if (value === PaymentStatus.UNPAID) {
+             newData.amountPaid = 0;
+             newData.walletPayments = {};
+          }
       }
       
-      // Implicit partial handling not fully exposed in UI but kept in logic
       if (field === 'amountPaid') {
           const num = parseFloat(value) || 0;
           if (num >= order.totalPrice - 0.01) newData.paymentStatus = PaymentStatus.PAID;
@@ -539,10 +644,10 @@ const OrderRow: React.FC<OrderCardProps> = ({ order, onUpdate, onDelete, onViewL
           amountPaid: newData.amountPaid,
           paymentMethod: newData.paymentMethod || '',
           shippingStatus: newData.shippingStatus,
-          referenceNumber: newData.referenceNumber || ''
+          referenceNumber: newData.referenceNumber || '',
+          walletPayments: newData.walletPayments || {}
       });
 
-      // Prepare payload with correct types to fix "string not assignable to PaymentMethod" error
       const payload: GroupedOrder = {
         ...newData,
         paymentMethod: (newData.paymentMethod === '' ? undefined : newData.paymentMethod) as PaymentMethod | undefined
@@ -553,130 +658,339 @@ const OrderRow: React.FC<OrderCardProps> = ({ order, onUpdate, onDelete, onViewL
 
   // Determine Row Color Class based on Status Priority
   const getRowColorClass = () => {
-      // 1. Paid AND Shipped -> Purple/Blue (Completed Status)
       if (localData.paymentStatus === PaymentStatus.PAID && localData.shippingStatus === ShippingStatus.SHIPPED) {
-          return 'bg-purple-50 dark:bg-purple-900/20 border-purple-100 dark:border-purple-800';
+          return 'bg-purple-50/50 dark:bg-purple-950/15 border-purple-200/80 dark:border-purple-800/60';
       }
-      // 2. Paid (implicitly Not Shipped based on priority 1) -> Green
       if (localData.paymentStatus === PaymentStatus.PAID) {
-          return 'bg-green-50 dark:bg-green-900/20 border-green-100 dark:border-green-800';
+          return 'bg-emerald-50/50 dark:bg-emerald-950/15 border-emerald-200/80 dark:border-emerald-800/60';
       }
-      // 3. Unpaid (implicitly doesn't matter if shipped or not) -> Red
-      return 'bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-800';
+      if (localData.paymentStatus === PaymentStatus.PARTIAL) {
+          return 'bg-amber-50/55 dark:bg-amber-950/15 border-amber-200/80 dark:border-amber-800/60';
+      }
+      return 'bg-rose-50/55 dark:bg-rose-950/15 border-rose-200/80 dark:border-rose-900/50';
   };
 
   const getStatusTextColor = () => {
-      if (localData.paymentStatus === PaymentStatus.PAID) return 'text-green-900 dark:text-green-300';
-      if (localData.paymentStatus === PaymentStatus.PARTIAL) return 'text-orange-900 dark:text-orange-300';
-      return 'text-red-900 dark:text-red-300';
+      if (localData.paymentStatus === PaymentStatus.PAID) return 'text-emerald-600 dark:text-emerald-400';
+      if (localData.paymentStatus === PaymentStatus.PARTIAL) return 'text-amber-600 dark:text-amber-400';
+      return 'text-rose-600 dark:text-rose-400';
+  };
+
+  const getStatusDropdownClass = () => {
+      if (localData.paymentStatus === PaymentStatus.PAID) {
+          return 'bg-emerald-50/80 dark:bg-emerald-950/30 border-emerald-200/50 dark:border-emerald-800/40 text-emerald-600 dark:text-emerald-400';
+      }
+      if (localData.paymentStatus === PaymentStatus.PARTIAL) {
+          return 'bg-amber-50/80 dark:bg-amber-950/30 border-amber-200/50 dark:border-amber-800/30 text-amber-600 dark:text-amber-400';
+      }
+      return 'bg-rose-50/80 dark:bg-rose-950/30 border-rose-200/50 dark:border-rose-900/40 text-rose-600 dark:text-rose-400';
   };
 
   return (
-    <div className={`grid grid-cols-12 gap-2 items-center p-2 rounded-xl border ${getRowColorClass()} shadow-sm hover:shadow-md transition-all group text-xs`}>
-       
-       {/* 1. Date */}
-       <div className="col-span-1 text-center">
-          <p className="font-bold text-gray-500 dark:text-gray-400 leading-tight">
-             {new Date(order.createdAt).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric'})}
-          </p>
-          <p className="text-[8px] text-gray-400">{new Date(order.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
-       </div>
+    <div className="flex flex-col gap-1 w-full bg-white/45 dark:bg-gray-900/30 p-1.5 rounded-2.5xl border border-gray-100 dark:border-gray-800/50 shadow-xs transition-all hover:bg-white/60 dark:hover:bg-gray-900/50 hover:border-[#ff6b9a]/40">
+      <div className={`grid grid-cols-12 gap-2 items-center p-2 rounded-2xl border ${getRowColorClass()} shadow-xs group text-xs transition-all`}>
+         
+         {/* 1. Date */}
+         <div className="col-span-1 text-center">
+            <p className="font-extrabold text-gray-500 dark:text-gray-400 leading-tight">
+               {new Date(order.createdAt).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric'})}
+            </p>
+            <p className="text-[8px] text-gray-400">{new Date(order.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
+         </div>
 
-       {/* 2. Customer & Total */}
-       <div className="col-span-3 flex items-center gap-2 overflow-hidden pl-1">
-          <div className="w-6 h-6 rounded-full bg-white dark:bg-gray-700 flex items-center justify-center font-black text-[9px] text-gray-600 dark:text-gray-300 border border-gray-100 dark:border-gray-600 shrink-0">
-             {order.customerUsername.charAt(0).toUpperCase()}
+         {/* 2. Featured Bale & Total */}
+         <div className="col-span-3 flex items-center gap-2 overflow-hidden pl-1">
+            <div className="w-6 h-6 rounded-full bg-[#ff6b9a]/10 dark:bg-[#ff6b9a]/20 text-[#ff6b9a] flex items-center justify-center font-black text-[10px] shrink-0">
+               📦
+            </div>
+            <div className="min-w-0">
+               <div className="font-extrabold text-gray-800 dark:text-white truncate leading-none" title={displayName}>
+                 {displayName}
+               </div>
+               <div className="text-[9px] font-bold text-gray-500 dark:text-gray-400 flex items-center gap-1 mt-1">
+                  ₱{order.totalPrice.toLocaleString()} • {order.quantity} pcs
+                  {!isLiveSummary && order.isCustomerVIP && (
+                     <span className="bg-yellow-400 text-white px-1 rounded-[2px] text-[8px] leading-tight ml-1">VIP</span>
+                  )}
+               </div>
+            </div>
+         </div>
+
+         {/* 3. Ref No (Input) */}
+         <div className="col-span-2">
+            <input 
+               type="text"
+               value={localData.referenceNumber}
+               placeholder="Ref No."
+               onBlur={(e) => commitChange('referenceNumber', e.target.value)}
+               onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+               onChange={(e) => setLocalData({...localData, referenceNumber: e.target.value})}
+               className="w-full bg-white/70 dark:bg-gray-800/80 border border-gray-200 dark:border-gray-700/60 focus:border-pawPink rounded-xl px-2.5 py-1.5 text-[10px] font-mono text-gray-900 dark:text-white outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500 transition-colors text-center"
+            />
+         </div>
+
+         {/* 4. Payment Status (Dropdown) */}
+         <div className="col-span-2 relative">
+            <select 
+               value={localData.paymentStatus}
+               onChange={(e) => commitChange('paymentStatus', e.target.value)}
+               className={`w-full border appearance-none text-center font-black text-[10px] uppercase py-1.5 rounded-xl cursor-pointer outline-none focus:border-pawPink transition-colors ${getStatusDropdownClass()}`}
+            >
+               {[PaymentStatus.UNPAID, PaymentStatus.PARTIAL, PaymentStatus.PAID].map(s => (
+                   <option key={s} value={s} className="text-gray-950 bg-white dark:text-white dark:bg-gray-800 font-bold">
+                      {s}
+                   </option>
+               ))}
+            </select>
+         </div>
+
+         {/* 5. Payment Method (Interactive Split) */}
+         <div className="col-span-2 flex flex-col items-center justify-center min-w-0 relative">
+            {(() => {
+               const activeEntries = Object.entries(localData.walletPayments || {}).filter(([_, amt]) => Number(amt) > 0);
+               
+               let displayNode;
+               if (activeEntries.length === 1) {
+                  // Only one wallet used
+                  const [walletName, amt] = activeEntries[0];
+                  displayNode = (
+                     <button 
+                       type="button"
+                       onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                       className="px-2 py-1.5 rounded-xl bg-pink-50/70 dark:bg-pink-950/30 text-[#ff6b9a] dark:text-pink-400 border border-pink-200/50 dark:border-pink-900/30 text-[10px] font-black uppercase shrink-0 transition-all hover:scale-[1.02] active:scale-95 flex items-center justify-center gap-1 w-full text-center"
+                       title={`${walletName}: ₱${Number(amt).toLocaleString()}. Click to view detail break down.`}
+                     >
+                        <span className="truncate max-w-[70px] font-mono font-black">{walletName}</span>
+                        <span className="text-[7px]">▼</span>
+                     </button>
+                  );
+               } else if (activeEntries.length > 1) {
+                  // Multiple wallets used
+                  displayNode = (
+                     <button 
+                       type="button"
+                       onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                       className="px-2 py-1.5 rounded-xl bg-purple-50/80 dark:bg-purple-950/20 text-purple-600 dark:text-purple-400 border border-purple-200/40 dark:border-purple-800/30 text-[10px] font-black uppercase shrink-0 transition-all hover:scale-[1.02] active:scale-95 flex items-center justify-center gap-1 w-full text-center"
+                       title="Split Wallet Payments. Click to view breakdown."
+                     >
+                        <span className="truncate font-black">📊 SPLIT ({activeEntries.length})</span>
+                        <span className="text-[7px]">▼</span>
+                     </button>
+                  );
+               } else {
+                  // No specific wallet payment
+                  displayNode = (
+                     <button
+                       type="button"
+                       onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                       className="px-2 py-1.5 rounded-xl bg-gray-50/80 dark:bg-gray-800/40 text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-200 text-[10px] font-extrabold uppercase shrink-0 transition-all hover:scale-[1.02] active:scale-95 flex items-center justify-center gap-1 w-full text-center border border-gray-200/40 dark:border-gray-700/40"
+                       title="Click to select or split payment"
+                     >
+                        <span className="truncate font-black">{localData.paymentMethod || 'Select/Split'}</span>
+                        <span className="text-[7px]">▼</span>
+                     </button>
+                  );
+               }
+
+               return (
+                  <>
+                     {displayNode}
+                     
+                     {isDropdownOpen && (
+                        <>
+                           {/* Click backdrop to close dropdown */}
+                           <div className="fixed inset-0 z-[60] bg-transparent" onClick={() => setIsDropdownOpen(false)} />
+                           
+                           {/* Beautiful interactive Dropdown content */}
+                           <div className="absolute top-[34px] left-1/2 -translate-x-1/2 w-48 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800/80 rounded-2xl shadow-xl p-3 z-[70] animate-fadeIn space-y-2 text-left">
+                              <div className="flex justify-between items-center pb-1.5 border-b border-gray-100 dark:border-gray-800">
+                                 <span className="text-[8px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                                    Breaks summary
+                                 </span>
+                                 <span className="text-[8px] font-black text-pink-500 bg-pink-50 dark:bg-pink-950/40 px-1.5 py-0.5 rounded-md uppercase">
+                                    {activeEntries.length} active
+                                 </span>
+                              </div>
+                              
+                              {activeEntries.length > 0 ? (
+                                 <div className="space-y-1 max-h-32 overflow-y-auto custom-scrollbar">
+                                    {activeEntries.map(([wallet, amt]) => (
+                                       <div key={wallet} className="flex justify-between items-center text-[9px] bg-gray-50/60 dark:bg-gray-900/50 p-1.5 rounded-lg border border-gray-100/40 dark:border-gray-800/30">
+                                          <span className="font-extrabold text-gray-600 dark:text-gray-400 flex items-center gap-1">
+                                             <span className="w-1.5 h-1.5 rounded-full bg-[#ff6b9a] shrink-0"></span>
+                                             {wallet}
+                                          </span>
+                                          <span className="font-black text-gray-800 dark:text-gray-200 font-mono">
+                                             ₱{Number(amt).toLocaleString()}
+                                          </span>
+                                       </div>
+                                    ))}
+                                 </div>
+                              ) : (
+                                 <div className="text-center py-2 text-[9px] text-gray-400 dark:text-gray-500 font-bold uppercase">
+                                    No wallets entered
+                                 </div>
+                              )}
+                              
+                              <div className="pt-1.5 border-t border-gray-100 dark:border-gray-800 flex justify-between items-center text-[9px] font-extrabold uppercase">
+                                 <span className="text-gray-400 dark:text-gray-500">Total Paid:</span>
+                                 <span className="text-[#ff6b9a] font-mono font-black text-xs leading-none">
+                                    ₱{totalPaidFromWallets.toLocaleString()}
+                                 </span>
+                              </div>
+                              
+                              <button
+                                 type="button"
+                                 onClick={() => {
+                                    setIsDropdownOpen(false);
+                                    setIsExpanded(true); // Expands editing panel below
+                                 }}
+                                 className="w-full text-center py-1.5 bg-[#ff6b9a]/10 hover:bg-[#ff6b9a]/25 dark:bg-pink-950/30 dark:hover:bg-pink-900/45 text-[#ff6b9a] border border-[#ff6b9a]/25 dark:border-pink-900/30 rounded-xl transition-all text-[8.5px] font-black uppercase tracking-wider flex items-center justify-center gap-1"
+                              >
+                                 ✏️ Edit Splits
+                              </button>
+                           </div>
+                        </>
+                     )}
+                  </>
+               );
+            })()}
+            
+            <span className="text-[8px] font-black text-gray-400 dark:text-gray-500 mt-1 uppercase tracking-tighter">
+               ₱{totalPaidFromWallets > 0 ? totalPaidFromWallets.toLocaleString() : localData.amountPaid.toLocaleString()} paid
+            </span>
+         </div>
+
+         {/* 6. Shipping (Icon/Dropdown Compact) */}
+         <div className="col-span-1 flex justify-center">
+             <select 
+                value={localData.shippingStatus}
+                onChange={(e) => commitChange('shippingStatus', e.target.value)}
+                className={`w-full bg-white/70 dark:bg-gray-800/80 border border-gray-200 dark:border-gray-700/60 text-center font-extrabold text-[9px] py-1.5 rounded-xl outline-none cursor-pointer ${localData.shippingStatus === 'Shipped' ? 'text-purple-600 dark:text-purple-400' : 'text-gray-600 dark:text-gray-400'}`}
+             >
+                 <option value="Pending" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800 font-bold">Wait</option>
+                 <option value="Shipped" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800 font-bold">Ship</option>
+                 <option value="RTS" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800 font-bold">RTS</option>
+                 <option value="Cancelled" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800 font-bold">Cancel</option>
+             </select>
           </div>
-          <div className="min-w-0">
-             <div className="font-black text-gray-800 dark:text-white truncate leading-none">@{order.customerUsername}</div>
-             <div className="text-[9px] font-bold text-gray-500 dark:text-gray-400 flex items-center gap-1">
-                ₱{order.totalPrice.toLocaleString()} • {order.quantity} items
-                {order.isCustomerVIP && <span className="bg-yellow-400 text-white px-1 rounded-[2px] text-[8px] leading-tight ml-1">VIP</span>}
-             </div>
-          </div>
-       </div>
 
-       {/* 3. Ref No (Input) */}
-       <div className="col-span-2">
-          <input 
-             type="text"
-             value={localData.referenceNumber}
-             placeholder="Ref No."
-             onBlur={(e) => commitChange('referenceNumber', e.target.value)}
-             onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-             onChange={(e) => setLocalData({...localData, referenceNumber: e.target.value})}
-             className="w-full bg-white/50 dark:bg-black/20 border border-transparent focus:border-pawPink/50 hover:bg-white dark:hover:bg-black/40 rounded px-2 py-1 text-[10px] font-mono text-gray-900 dark:text-white outline-none placeholder:text-gray-400 transition-colors text-center"
-          />
-       </div>
+          {/* 7. Actions */}
+         <div className="col-span-1 flex justify-center gap-1">
+            <button 
+               onClick={onViewLogs}
+               className="text-gray-400 hover:text-blue-500 transition-colors w-5 h-5 flex items-center justify-center"
+               title="Logs"
+            >
+               📜
+            </button>
+            <button 
+               onClick={onDelete}
+               className="text-gray-400 hover:text-red-500 transition-colors w-5 h-5 flex items-center justify-center"
+               title="Delete"
+            >
+               🗑️
+            </button>
+         </div>
+      </div>
 
-       {/* 4. Payment Status (Dropdown) */}
-       <div className="col-span-2 relative">
-          <select 
-             value={localData.paymentStatus}
-             onChange={(e) => commitChange('paymentStatus', e.target.value)}
-             className={`w-full bg-white/60 dark:bg-black/20 appearance-none text-center font-extrabold text-[10px] uppercase py-1 rounded cursor-pointer outline-none ${getStatusTextColor()}`}
-          >
-             {/* Only showing Paid and Unpaid options as requested */}
-             {[PaymentStatus.UNPAID, PaymentStatus.PAID].map(s => (
-                 <option key={s} value={s} className="text-gray-900 bg-white dark:text-white dark:bg-gray-800 font-bold">
-                    {s}
-                 </option>
-             ))}
-          </select>
-       </div>
+      {/* Expanded Split Payment Allocation Panel */}
+      {isExpanded && (
+         <div className="p-4 bg-gray-50/90 dark:bg-gray-800/90 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 mx-1 mt-1 space-y-4 animate-scaleUp shadow-lg">
+            <div className="flex justify-between items-center pb-2 border-b border-gray-200 dark:border-gray-700/80">
+               <div>
+                  <h4 className="text-[10px] font-black uppercase tracking-wider text-gray-800 dark:text-gray-100 flex items-center gap-1">
+                     💰 Wallet Splits (Receipt Entries)
+                  </h4>
+                  <p className="text-[9px] text-gray-400 dark:text-gray-400 font-bold uppercase mt-0.5">
+                     Specify exact payment entry per wallet. Adjusts status automatically.
+                  </p>
+               </div>
+               <button 
+                  type="button" 
+                  onClick={() => setIsExpanded(false)}
+                  className="text-[9px] font-black text-[#ff6b9a] hover:text-[#ff6b9a]/90 uppercase bg-pink-50 hover:bg-pink-100 dark:bg-pink-950/20 px-2.5 py-1.5 rounded-xl transition-all"
+               >
+                  Done ×
+               </button>
+            </div>
 
-       {/* 5. Payment Method (Dropdown) */}
-       <div className="col-span-2">
-          <select 
-             value={localData.paymentMethod}
-             onChange={(e) => commitChange('paymentMethod', e.target.value)}
-             className="w-full bg-transparent text-center font-extrabold text-[10px] text-gray-900 dark:text-white outline-none border-b border-transparent hover:border-gray-300 focus:border-pawPink cursor-pointer py-1"
-          >
-             <option value="" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800">-</option>
-             {Object.values(PaymentMethod).map(m => (
-                 <option key={m} value={m} className="text-gray-900 bg-white dark:text-white dark:bg-gray-800">
-                    {m}
-                 </option>
-             ))}
-          </select>
-       </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2">
+               {['GCash', 'Maya', 'TikTok Checkout', 'GoTyme', 'SeaBank', 'BPI', 'Cash'].map(walletName => {
+                  const val = localData.walletPayments[walletName] || '';
+                  return (
+                     <div key={walletName} className="bg-white dark:bg-gray-900 p-2.5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-xs flex flex-col justify-between">
+                        <span className="text-[8.5px] font-black uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1 font-mono">
+                           {walletName}
+                        </span>
+                        <div className="flex items-center gap-1">
+                           <span className="text-[9px] font-black text-gray-400 dark:text-gray-500">₱</span>
+                           <input 
+                              type="number"
+                              placeholder="0"
+                              min="0"
+                              value={val}
+                              onChange={(e) => handleWalletPaymentChange(walletName, e.target.value)}
+                              className="w-full bg-transparent py-0.5 font-black text-xs text-gray-900 dark:text-white outline-none"
+                           />
+                           <button 
+                              type="button"
+                              onClick={() => handleSetFullWallet(walletName)}
+                              className="px-1.5 py-0.5 rounded-lg text-[8.5px] font-black uppercase tracking-wide bg-pink-100/15 hover:bg-pink-100 dark:bg-pink-950/40 text-[#ff6b9a] transition-all"
+                              title="Set remaining balance to this wallet"
+                           >
+                              Full
+                           </button>
+                        </div>
+                     </div>
+                  );
+               })}
+            </div>
 
-       {/* 6. Shipping (Icon/Dropdown Compact) */}
-       <div className="col-span-1 flex justify-center">
-           <select 
-              value={localData.shippingStatus}
-              onChange={(e) => commitChange('shippingStatus', e.target.value)}
-              className={`w-full bg-transparent text-center font-extrabold text-[9px] outline-none cursor-pointer ${localData.shippingStatus === 'Shipped' ? 'text-purple-900 dark:text-purple-300' : 'text-gray-600 dark:text-gray-400'}`}
-           >
-               <option value="Pending" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800">Wait</option>
-               <option value="Shipped" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800">Ship</option>
-               <option value="RTS" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800">RTS</option>
-               <option value="Cancelled" className="text-gray-900 bg-white dark:text-white dark:bg-gray-800">Cancel</option>
-           </select>
-       </div>
-
-       {/* 7. Actions */}
-       <div className="col-span-1 flex justify-center gap-1">
-          <button 
-             onClick={onViewLogs}
-             className="text-gray-400 hover:text-blue-500 transition-colors w-5 h-5 flex items-center justify-center"
-             title="Logs"
-          >
-             📜
-          </button>
-          <button 
-             onClick={onDelete}
-             className="text-gray-400 hover:text-red-500 transition-colors w-5 h-5 flex items-center justify-center"
-             title="Delete"
-          >
-             🗑️
-          </button>
-       </div>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pt-2.5 border-t border-dotted border-gray-200 dark:border-gray-700/80 text-[10px]">
+               <div className="flex flex-wrap gap-4 font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-widest leading-none">
+                  <span>Total Due: <strong className="text-gray-800 dark:text-white">₱{order.totalPrice.toLocaleString()}</strong></span>
+                  <span>Paid: <strong className="text-[#ff6b9a]">₱{totalPaidFromWallets.toLocaleString()}</strong></span>
+                  <span>Remaining: <strong className={order.totalPrice - totalPaidFromWallets > 0 ? 'text-red-500 dark:text-red-400' : 'text-green-500 dark:text-green-400'}>
+                     ₱{Math.max(0, order.totalPrice - totalPaidFromWallets).toLocaleString()}
+                  </strong></span>
+               </div>
+               
+               <div className="mt-2.5 sm:mt-0 flex gap-2 w-full sm:w-auto shrink-0">
+                  <button 
+                    type="button"
+                    onClick={() => {
+                       setLocalData(prev => ({ ...prev, walletPayments: {}, amountPaid: 0, paymentStatus: PaymentStatus.UNPAID }));
+                       onUpdate({ ...order, walletPayments: undefined, amountPaid: 0, paymentStatus: PaymentStatus.UNPAID, shippingStatus: localData.shippingStatus, referenceNumber: localData.referenceNumber }, "Reset all wallet payments to 0");
+                    }}
+                    className="text-[8.5px] font-black uppercase tracking-wider text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 px-3 py-1.5 rounded-xl transition-all"
+                  >
+                     Reset All
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => {
+                       handleSetFullWallet('Cash');
+                    }}
+                    className="text-[8.5px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-[#10b980]/20 dark:text-[#34d399] px-3 py-1.5 rounded-xl transition-all"
+                  >
+                     Receive Full Cash
+                  </button>
+               </div>
+            </div>
+         </div>
+      )}
     </div>
   );
 };
 
 const HistoryModal = ({ order, onClose }: { order: GroupedOrder, onClose: () => void }) => {
+  const displayName = useMemo(() => {
+    const product = db.getProducts().find(p => p.id === order.productId);
+    const baleObj = product ? db.getBales().find(b => b.id === product.baleBatch) : null;
+    return baleObj ? baleObj.name : (order.customerUsername === 'Live-Summary' ? 'Consolidated Live Sale' : `@${order.customerUsername}`);
+  }, [order.productId, order.customerUsername]);
+
   // Calculate logs based on grouped items
   const uniqueLogs = useMemo(() => {
      if (!order.items) return [];
@@ -700,7 +1014,7 @@ const HistoryModal = ({ order, onClose }: { order: GroupedOrder, onClose: () => 
           <div className="bg-pawSoftBlue dark:bg-slate-700 p-6 flex justify-between items-center shrink-0">
              <div>
                 <h3 className="text-xl font-black text-blue-950 dark:text-blue-100 uppercase tracking-tight">Audit Log</h3>
-                <p className="text-xs font-bold text-blue-500 dark:text-blue-300">@{order.customerUsername}</p>
+                <p className="text-xs font-bold text-blue-500 dark:text-blue-300">{displayName}</p>
              </div>
              <button onClick={onClose} className="bg-white dark:bg-gray-600 text-blue-900 dark:text-blue-100 w-8 h-8 rounded-full font-black flex items-center justify-center shadow-sm">✕</button>
           </div>
@@ -725,7 +1039,7 @@ const DeleteOrderConfirmationModal = ({ customer, onConfirm, onClose }: { custom
             Delete Orders?
          </h3>
          <p className="text-gray-500 dark:text-gray-400 font-bold text-sm mb-8 leading-relaxed">
-            Removing all visible orders for <span className="text-red-600 dark:text-red-400">@{customer}</span> in this session.
+            Removing all visible orders for <span className="text-red-600 dark:text-red-400">{customer}</span> in this session.
          </p>
          <div className="flex gap-3">
              <button onClick={onClose} className="flex-1 py-4 bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-black uppercase text-xs tracking-widest rounded-2xl active:scale-95 transition-all">Cancel</button>

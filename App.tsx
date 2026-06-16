@@ -10,7 +10,6 @@ import Dashboard from './views/Dashboard';
 import LiveSell from './views/LiveSell';
 import Orders from './views/Orders';
 import Inventory from './views/Inventory';
-import Customers from './views/Customers';
 import Accounting from './views/Accounting';
 import Bales from './views/Bales';
 import Settings from './views/Settings';
@@ -186,7 +185,6 @@ const App: React.FC = () => {
       case 'livesell': return <LiveSell />;
       case 'orders': return <Orders />;
       case 'inventory': return <Inventory />;
-      case 'customers': return <Customers />;
       case 'accounting': return <Accounting />;
       case 'bales': return <Bales />;
       case 'reports': return <Reports />;

@@ -60,7 +60,6 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange }) => 
           <NavItem active={activeTab === 'inventory'} onClick={() => onTabChange('inventory')} icon={<BoxIcon />} label="Bales" />
           <NavItem active={activeTab === 'bales'} onClick={() => onTabChange('bales')} icon={<SearchIcon />} label="Inventory" />
           
-          <NavItem active={activeTab === 'customers'} onClick={() => onTabChange('customers')} icon={<UserIcon />} label="Customers" />
           <NavItem active={activeTab === 'accounting'} onClick={() => onTabChange('accounting')} icon={<ChartIcon />} label="Accounting" />
           <NavItem active={activeTab === 'reports'} onClick={() => onTabChange('reports')} icon={<ReportIcon />} label="Reports" />
           
@@ -107,7 +106,6 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange }) => 
             onClick={(e) => e.stopPropagation()} // Prevent closing when clicking inside menu
           >
              <p className="px-4 py-2 text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest">More Options</p>
-             <MobileMenuLink active={activeTab === 'customers'} onClick={() => handleMobileNavClick('customers')} icon={<UserIcon />} label="Customers" />
              
              {/* Bales tab (now Inventory in menu) */}
              <MobileMenuLink active={activeTab === 'bales'} onClick={() => handleMobileNavClick('bales')} icon={<SearchIcon />} label="Inventory" />
@@ -142,7 +140,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange }) => 
         
         {/* More/Menu Button */}
         <MobileNavItem 
-          active={['customers', 'bales', 'accounting', 'settings', 'reports', 'devices'].includes(activeTab) || isMobileMenuOpen} 
+          active={['bales', 'accounting', 'settings', 'reports', 'devices'].includes(activeTab) || isMobileMenuOpen} 
           onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} 
           icon={<MenuIcon />} 
         />

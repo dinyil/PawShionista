@@ -90,6 +90,83 @@ const Dashboard: React.FC = () => {
     };
   }, [orders, products, baleUnitCosts, transactions, chartFilter]);
 
+  // --- 2b. Custom KPI metrics requested by user ---
+  const revisionStats = useMemo(() => {
+    const now = new Date();
+    
+    // Helper to check current month
+    const isWithinCurrentMonth = (timestamp: number) => {
+      const d = new Date(timestamp);
+      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    };
+
+    // Helper to check current week (starting Sunday)
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay());
+    startOfWeek.setHours(0, 0, 0, 0);
+    const isWithinCurrentWeek = (timestamp: number) => {
+      return timestamp >= startOfWeek.getTime();
+    };
+
+    // 1. Total Item Sold
+    const activeOrders = orders.filter(o => o.shippingStatus !== ShippingStatus.CANCELLED);
+    const totalItemSoldThisMonth = activeOrders
+      .filter(o => isWithinCurrentMonth(o.createdAt))
+      .reduce((sum, o) => sum + o.quantity, 0);
+    const totalItemSoldAllTime = activeOrders
+      .reduce((sum, o) => sum + o.quantity, 0);
+
+    // 2. Revenue This Week
+    const revenueThisWeek = activeOrders
+      .filter(o => isWithinCurrentWeek(o.createdAt))
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    // 3. Revenue This Month & Profit This Month
+    const revenueThisMonth = activeOrders
+      .filter(o => isWithinCurrentMonth(o.createdAt))
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    const expensesThisMonth = transactions.filter(t => t.type === 'Expense' && isWithinCurrentMonth(t.createdAt));
+    const totalExpensesThisMonth = expensesThisMonth.reduce((sum, t) => sum + t.amount, 0);
+    const totalCOGSThisMonth = activeOrders
+      .filter(o => isWithinCurrentMonth(o.createdAt))
+      .reduce((sum, o) => {
+         const product = products.find(p => p.id === o.productId);
+         const baleId = product?.baleBatch || '';
+         const unitCost = baleUnitCosts[baleId] || 0;
+         return sum + (unitCost * o.quantity);
+      }, 0);
+    const netProfitThisMonth = revenueThisMonth - totalCOGSThisMonth - totalExpensesThisMonth;
+
+    // 4. Total Live This Month
+    const sessions = db.getSessions();
+    const totalLiveThisMonth = sessions.filter(session => {
+      if (session.id.startsWith('s_')) {
+        const ts = parseInt(session.id.replace('s_', ''), 10);
+        if (!isNaN(ts)) {
+          const d = new Date(ts);
+          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        }
+      }
+      try {
+         const d = new Date(session.date);
+         return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+      } catch (e) {
+         return false;
+      }
+    }).length;
+
+    return {
+      totalItemSoldThisMonth,
+      totalItemSoldAllTime,
+      revenueThisWeek,
+      revenueThisMonth,
+      netProfitThisMonth,
+      totalLiveThisMonth,
+      totalLiveSessionsOverall: sessions.length
+    };
+  }, [orders, products, baleUnitCosts, transactions]);
+
   // --- 3. Chart Data Generation (remains synced with chartFilter) ---
   const chartData = useMemo(() => {
     const now = new Date();
@@ -224,29 +301,32 @@ const Dashboard: React.FC = () => {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard 
-            label={`Sales ${stats.labelSuffix}`} 
-            value={`₱${stats.sales.toLocaleString()}`} 
+            label="Total Item Sold" 
+            value={revisionStats.totalItemSoldThisMonth.toLocaleString()} 
             color="bg-pawPink dark:bg-pink-900/40" 
             textColor="text-red-600 dark:text-red-400" 
+            subValue={`${revisionStats.totalItemSoldAllTime.toLocaleString()} ALL-TIME`}
         />
         <StatCard 
-            label={`Profit ${stats.labelSuffix}`} 
-            value={`₱${stats.profit.toLocaleString()}`} 
+            label="Revenue This Week" 
+            value={`₱${revisionStats.revenueThisWeek.toLocaleString()}`} 
             color="bg-purple-100 dark:bg-purple-900/40" 
             textColor="text-purple-700 dark:text-purple-300" 
-            subValue={stats.profit < 0 ? "(Expense Heavy)" : "Net Earnings"}
+            subValue="CURRENT WEEK"
         />
         <StatCard 
-            label="Pending Payments" 
-            value={stats.pending} 
+            label="Revenue This Month" 
+            value={`₱${revisionStats.revenueThisMonth.toLocaleString()}`} 
             color="bg-pawPeach dark:bg-orange-900/40" 
             textColor="text-orange-600 dark:text-orange-300" 
+            subValue={`₱${revisionStats.netProfitThisMonth.toLocaleString()} PROFIT`}
         />
         <StatCard 
-            label="Shipped" 
-            value={stats.shipped} 
+            label="Total Live This Month" 
+            value={revisionStats.totalLiveThisMonth.toString()} 
             color="bg-pawSoftBlue dark:bg-blue-900/40" 
             textColor="text-blue-600 dark:text-blue-300" 
+            subValue={`${revisionStats.totalLiveSessionsOverall} OVERALL`}
         />
       </div>
 

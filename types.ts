@@ -57,6 +57,7 @@ export interface Order {
   paymentMethod?: PaymentMethod;
   referenceNumber?: string;
   amountPaid: number;
+  walletPayments?: Record<string, number>;
   createdAt: number;
   usedVipTicket?: boolean; // Track if ticket was used in this order batch
   logs?: string[]; // Audit trail for edits
@@ -81,7 +82,7 @@ export interface Bale {
 
 export interface Transaction {
   id: string;
-  type: 'Expense' | 'Withdrawal' | 'Loan';
+  type: 'Expense' | 'Withdrawal' | 'Loan' | 'Sale Live';
   amount: number;
   wallet: string;
   category: string;
